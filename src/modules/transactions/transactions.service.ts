@@ -1002,7 +1002,6 @@ export async function updateTransaction(
   return convertedResult;
 }
 
-export async function importTransactionsFromCSV()
 
 /**
  * Delete transaction and revert account balance
