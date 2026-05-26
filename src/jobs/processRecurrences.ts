@@ -112,14 +112,14 @@ async function processDueRecurringTransactions() {
             `[CronJob] ⏭️  Skipping recurring ${recurring.id} - transaction already exists for ${today.toISOString().split('T')[0]}`
           );
           skippedCount++;
-          
+
           // Still update nextRunAt and lastRunDate to prevent reprocessing
           const nextRunAt = calculateNextRunDate(today, recurring.frequency);
           const shouldDeactivate = recurring.endDate && nextRunAt > new Date(recurring.endDate);
-          
+
           await prisma.recurringTransaction.update({
             where: { id: recurring.id },
-            data: { 
+            data: {
               nextRunAt,
               lastRunDate: today,
               ...(shouldDeactivate && { isActive: false }),
@@ -131,7 +131,7 @@ async function processDueRecurringTransactions() {
         // Check if today is within the recurring period
         const startDate = new Date(recurring.startDate);
         startDate.setHours(0, 0, 0, 0);
-        
+
         if (today < startDate) {
           // Not yet in the period - skip
           console.log(
@@ -148,22 +148,53 @@ async function processDueRecurringTransactions() {
         const shouldCreateAsPaid = isCreditCard;
 
         // Execute recurring transaction (creates transaction, updates balance if paid, and updates nextRunAt/lastRunDate)
-        const result = await executeRecurringTransaction(recurring.id, recurring.householdId, {
-          date: today,
-          paid: shouldCreateAsPaid,
-        });
+        let runDate = new Date(recurring.nextRunAt);
+        runDate.setHours(0, 0, 0, 0);
 
-        // Check if nextRunAt exceeds endDate
-        const nextRunAt = result.nextRunAt;
-        const shouldDeactivate = recurring.endDate && nextRunAt > new Date(recurring.endDate);
+        let lastResult = null;
 
-        // Deactivate if needed (lastRunDate and nextRunAt already updated by executeRecurringTransaction)
-        if (shouldDeactivate) {
-          await prisma.recurringTransaction.update({
-            where: { id: recurring.id },
-            data: { isActive: false },
+        while (runDate <= today) {
+          // 🔒 IDEMPOTÊNCIA por data
+          const existingTransaction = await prisma.transaction.findFirst({
+            where: {
+              householdId: recurring.householdId,
+              recurringTransactionId: recurring.id,
+              date: runDate,
+            },
           });
+
+          if (!existingTransaction) {
+            lastResult = await executeRecurringTransaction(recurring.id, recurring.householdId, {
+              date: new Date(runDate),
+              paid: shouldCreateAsPaid,
+            });
+
+            console.log(
+              `[CronJob] ✅ Retro processed ${recurring.id} - ${runDate.toISOString().split('T')[0]}`
+            );
+          } else {
+            console.log(
+              `[CronJob] ⏭️  Already exists ${recurring.id} - ${runDate.toISOString().split('T')[0]}`
+            );
+          }
+
+          // próxima data baseada na frequência
+          runDate = calculateNextRunDate(runDate, recurring.frequency);
         }
+        // Atualiza nextRunAt para a próxima execução futura
+        const nextRunAt = runDate;
+
+        const shouldDeactivate =
+          recurring.endDate && nextRunAt > new Date(recurring.endDate);
+
+        await prisma.recurringTransaction.update({
+          where: { id: recurring.id },
+          data: {
+            nextRunAt,
+            lastRunDate: today,
+            ...(shouldDeactivate && { isActive: false }),
+          },
+        });
 
         processedCount++;
         console.log(
@@ -204,9 +235,9 @@ async function main() {
   try {
     console.log('[CronJob] Connecting to database...');
     // Database connection is handled by prisma client
-    
+
     await processDueRecurringTransactions();
-    
+
     console.log('[CronJob] ✅ Processing completed successfully');
   } catch (error) {
     console.error('[CronJob] ❌ Fatal error:', error);

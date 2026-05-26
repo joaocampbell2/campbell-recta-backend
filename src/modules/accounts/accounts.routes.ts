@@ -274,6 +274,22 @@ export async function accountRoutes(app: FastifyInstance) {
             accountId: { type: 'string', format: 'uuid' },
           },
         },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 100 },
+            type: { type: 'string' },
+            balance: { type: 'number' },
+            isActive: { type: 'boolean' },
+            color: { type: 'string', pattern: '^#[0-9A-Fa-f]{6}$' },
+            icon: { type: 'string', maxLength: 50 },
+            creditLimit: { type: 'number', minimum: 0 },
+            dueDay: { type: 'integer', minimum: 1, maximum: 31 },
+            closingDay: { type: 'integer', minimum: 1, maximum: 31 },
+            linkedAccountId: { type: 'string', format: 'uuid' },
+          },
+          additionalProperties: false,
+        },
         response: {
           200: {
             type: 'object',

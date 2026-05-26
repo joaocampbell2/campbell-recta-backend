@@ -31,6 +31,7 @@ import type {
  * @returns Positive number to increment, negative number to decrement
  */
 function calculateBalanceChange(amount: number, isIncome: boolean, accountType: string): number {
+  amount = Math.abs(amount);
   const isCreditCard = accountType === AccountType.CREDIT;
   if (isCreditCard) {
     return isIncome ? -amount : amount;
@@ -77,10 +78,10 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
       // First, try user's own personal account
       if (personalHousehold) {
         account = await prisma.account.findFirst({
-          where: { 
-            id: accountId, 
-            householdId: personalHousehold.id, 
-            isActive: true 
+          where: {
+            id: accountId,
+            householdId: personalHousehold.id,
+            isActive: true
           },
         });
       }
@@ -119,10 +120,10 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
           const allowedPersonalHouseholdIds = Array.from(personalHouseholdMap.values());
           if (allowedPersonalHouseholdIds.length > 0) {
             account = await prisma.account.findFirst({
-              where: { 
-                id: accountId, 
+              where: {
+                id: accountId,
                 householdId: { in: allowedPersonalHouseholdIds },
-                isActive: true 
+                isActive: true
               },
             });
 
@@ -171,7 +172,7 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
   // Create transaction and update balance in a single transaction
   const isPaid = input.paid !== undefined ? input.paid : true;
   const isSplit = input.isSplit === true && input.splits && input.splits.length > 0;
-  
+
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const transaction = await tx.transaction.create({
       data: {
@@ -221,21 +222,21 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
         where: { householdId },
         select: { userId: true, role: true, sharedAccountIds: true, allowPersonalAccountAccess: true },
       });
-      
+
       const memberMap = new Map(householdMembers.map(m => [m.userId, m]));
-      
+
       // Validate each split member
       for (const split of input.splits) {
         const member = memberMap.get(split.userId);
         if (!member) {
           throw new BadRequestError(`User ${split.userId} is not a member of this household`);
         }
-        
+
         // Only EDITOR and OWNER can be part of splits
         if (member.role !== 'EDITOR' && member.role !== 'OWNER') {
           throw new BadRequestError(`User ${split.userId} must be an EDITOR or OWNER to participate in splits`);
         }
-        
+
         // Get user's personal household to check for shared accounts
         const userMemberships = await tx.householdMember.findMany({
           where: { userId: split.userId },
@@ -243,16 +244,16 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
           orderBy: { createdAt: 'asc' },
           take: 1,
         });
-        
+
         const personalHousehold = userMemberships[0]?.household;
         if (!personalHousehold) {
           throw new BadRequestError(`User ${split.userId} does not have a personal household`);
         }
-        
+
         // Check if member has shared accounts available
         const sharedIds = member.sharedAccountIds;
         const hasSpecificSharedAccounts = Array.isArray(sharedIds) && sharedIds.length > 0 && sharedIds.every((id: unknown) => typeof id === 'string');
-        
+
         let availableAccounts: Array<{ id: string }> = [];
         if (hasSpecificSharedAccounts) {
           // Check specific shared account IDs
@@ -276,11 +277,11 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
             select: { id: true },
           });
         }
-        
+
         if (availableAccounts.length === 0) {
           throw new BadRequestError(`User ${split.userId} must have at least one shared account or credit card to participate in splits. Please share an account in your account settings.`);
         }
-        
+
         await tx.transactionSplit.create({
           data: {
             transactionId: transaction.id,
@@ -306,13 +307,13 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
             orderBy: { createdAt: 'asc' },
             take: 1,
           });
-          
+
           const personalHousehold = userMemberships[0]?.household;
           if (!personalHousehold) continue;
-          
+
           // If accountId is provided in the split, use it (validate it belongs to the member)
           let memberAccount = null;
-          
+
           if (split.accountId) {
             // Verify that the provided account belongs to the member's personal household
             const providedAccount = await tx.account.findFirst({
@@ -323,20 +324,20 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
                 type: { in: ['CHECKING', 'SAVINGS', 'CREDIT', 'CASH'] },
               },
             });
-            
+
             if (providedAccount) {
               // Verify that this account is accessible (either shared or member's own account)
               const member = await tx.householdMember.findFirst({
                 where: { householdId, userId: split.userId },
                 select: { sharedAccountIds: true, allowPersonalAccountAccess: true },
               });
-              
+
               if (member) {
                 const sharedIds = member.sharedAccountIds;
                 const hasSpecificSharedAccounts = Array.isArray(sharedIds) && sharedIds.length > 0 && sharedIds.every((id: unknown) => typeof id === 'string');
                 const isSharedAccount = hasSpecificSharedAccounts && (sharedIds as string[]).includes(split.accountId);
                 const hasPersonalAccess = member.allowPersonalAccountAccess;
-                
+
                 // Account is valid if it's explicitly shared or if personal access is allowed
                 if (isSharedAccount || hasPersonalAccess) {
                   memberAccount = providedAccount;
@@ -344,7 +345,7 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
               }
             }
           }
-          
+
           // If no accountId provided or validation failed, use auto-selection logic
           if (!memberAccount) {
             // Get member info to find shared accounts
@@ -352,13 +353,13 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
               where: { householdId, userId: split.userId },
               select: { sharedAccountIds: true, allowPersonalAccountAccess: true },
             });
-            
+
             if (!member) continue;
-            
+
             // Find an available shared account for this member
             const sharedIds = member.sharedAccountIds;
             const hasSpecificSharedAccounts = Array.isArray(sharedIds) && sharedIds.length > 0 && sharedIds.every((id: unknown) => typeof id === 'string');
-            
+
             if (hasSpecificSharedAccounts) {
               // Try to find a shared account (prefer CHECKING or SAVINGS, then CREDIT, then CASH)
               const accounts = await tx.account.findMany({
@@ -388,12 +389,12 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
               memberAccount = accounts[0] || null;
             }
           }
-          
+
           if (memberAccount) {
             // Create transaction for this member's split
             const splitAmount = split.amount;
             const splitBalanceChange = calculateBalanceChange(splitAmount, isIncomeForBalance(transactionType), memberAccount.type);
-            
+
             // Create the split transaction
             await tx.transaction.create({
               data: {
@@ -409,23 +410,23 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
                 isSplit: false, // This is the individual split transaction, not the main one
               },
             });
-            
+
             // Update member's account balance
             await updateBalanceForNormalTransaction(tx, memberAccount.id, splitBalanceChange);
-            
+
             // Recalculate credit card limit if it's a credit card
             if (memberAccount.type === AccountType.CREDIT) {
               await recalculateCreditCardLimit(tx, memberAccount.id);
             }
           }
         }
-        
+
         // Don't debit from the original account if splits are used - each member pays from their own account
         // The main transaction is just a record of the split
       } else {
         // Normal transaction without splits - debit from original account
         const balanceChange = calculateBalanceChange(amount, isIncomeForBalance(transactionType), account.type);
-        
+
         // Use helper function to ensure totalBalance = availableBalance + allocatedBalance
         await updateBalanceForNormalTransaction(tx, accountId, balanceChange);
 
@@ -738,7 +739,7 @@ export async function updateTransaction(
     const existingType = existingTransaction.type;
     const isExistingInternal = existingType === TransactionType.TRANSFER || existingType === TransactionType.ALLOCATION;
     const isNewInternal = input.type === TransactionType.TRANSFER || input.type === TransactionType.ALLOCATION;
-    
+
     if (isExistingInternal !== isNewInternal) {
       throw new BadRequestError('Cannot change transaction type between internal operations (TRANSFER/ALLOCATION) and income/expense (INCOME/EXPENSE)');
     }
@@ -786,7 +787,7 @@ export async function updateTransaction(
         const reverseChange = -calculateBalanceChange(oldAmount, oldIsIncome, oldAccountType);
         await updateBalanceForNormalTransaction(tx, oldAccountId, reverseChange);
       }
-      
+
       // Apply new balance if it should be paid
       if (newPaid) {
         // Use new account if changed, otherwise use old account
@@ -886,10 +887,10 @@ export async function updateTransaction(
         transactionDate.setHours(0, 0, 0, 0);
         const maxIterations = 6; // Process up to 6 future occurrences
         let iterationsProcessed = 0;
-        
+
         // Start from the next occurrence after the current transaction date
         let currentDate = new Date(transactionDate);
-        
+
         // Calculate next date based on frequency
         switch (recurring.frequency) {
           case 'DAILY':
@@ -980,7 +981,7 @@ export async function updateTransaction(
   const finalTransactionType = getCategoriesByType(CategoryType.INCOME).includes(finalCategoryName as any)
     ? TransactionType.INCOME
     : TransactionType.EXPENSE;
-  
+
   if (finalTransactionType === TransactionType.EXPENSE && finalCategoryName && newPaid) {
     try {
       const { checkBudgetThresholds } = await import('../notifications/budget-notifications.service.js');
@@ -1000,6 +1001,8 @@ export async function updateTransaction(
 
   return convertedResult;
 }
+
+export async function importTransactionsFromCSV()
 
 /**
  * Delete transaction and revert account balance
@@ -1031,7 +1034,7 @@ export async function deleteTransaction(transactionId: string, householdId: stri
   const wasPaid = transaction.paid !== false; // undefined or true = paid
   const transactionType = transaction.type || TransactionType.INCOME; // Default to INCOME for legacy transactions
   const isSplit = transaction.isSplit === true && transaction.splits && transaction.splits.length > 0;
-  
+
   if (wasPaid) {
     if (transactionType === TransactionType.TRANSFER && transaction.fromAccountId && transaction.toAccountId) {
       // Reverse transfer: move balance back
@@ -1075,15 +1078,15 @@ export async function deleteTransaction(transactionId: string, householdId: stri
               isInc,
               splitTransaction.account.type
             );
-            
+
             // Revert the balance using the helper function
             await updateBalanceForNormalTransaction(tx, splitTransaction.accountId, reverseChange);
-            
+
             // Recalculate credit card limit if it's a credit card
             if (splitTransaction.account.type === AccountType.CREDIT) {
               await recalculateCreditCardLimit(tx, splitTransaction.accountId);
             }
-            
+
             // Delete the individual split transaction
             await tx.transaction.delete({ where: { id: splitTransaction.id } });
           }
@@ -1230,11 +1233,11 @@ export async function batchCreateTransactions(input: BatchCreateTransactionsInpu
         select: { id: true, type: true },
       });
       const accountTypeMap = new Map(accounts.map(a => [a.id, a.type]));
-      
+
       await Promise.all(
         Array.from(balanceChanges.entries()).map(async ([accountId, change]) => {
           await updateBalanceForNormalTransaction(tx, accountId, change);
-          
+
           // Recalculate credit card limit if it's a credit card
           const accountType = accountTypeMap.get(accountId);
           if (accountType === AccountType.CREDIT) {
@@ -1277,7 +1280,7 @@ export async function batchDeleteTransactions(input: BatchDeleteTransactionsInpu
   const balanceReversals = new Map<string, number>();
   for (const t of transactions) {
     const wasPaid = t.paid !== false; // undefined or true = paid
-      if (wasPaid && t.accountId && t.account && t.categoryName) {
+    if (wasPaid && t.accountId && t.account && t.categoryName) {
       const isInc = t.type === TransactionType.INCOME;
       const reverseChange = -calculateBalanceChange(
         t.amount.toNumber(),
@@ -1308,11 +1311,11 @@ export async function batchDeleteTransactions(input: BatchDeleteTransactionsInpu
         select: { id: true, type: true },
       });
       const accountTypeMap = new Map(accounts.map(a => [a.id, a.type]));
-      
+
       await Promise.all(
         Array.from(balanceReversals.entries()).map(async ([accountId, change]) => {
           await updateBalanceForNormalTransaction(tx, accountId, change);
-          
+
           // Recalculate credit card limit if it's a credit card
           const accountType = accountTypeMap.get(accountId);
           if (accountType === AccountType.CREDIT) {
@@ -1369,14 +1372,14 @@ export async function getTransactionSummary(query: TransactionSummaryQuery) {
     if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) {
       continue;
     }
-    
+
     // Exclude credit card transactions from P&L calculations
     // Credit card expenses don't represent actual cash outflow until the invoice is paid
     // The real expense is recorded when paying the invoice via a bank account transaction
     if (t.account && t.account.type === AccountType.CREDIT) {
       continue;
     }
-    
+
     const amount = t.amount.toNumber();
     // Check by transaction type first (new system)
     if (t.type === TransactionType.INCOME) {
@@ -1524,19 +1527,19 @@ export async function getMonthlyRecap(query: { householdId: string; month?: stri
     if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) {
       continue;
     }
-    
+
     if (t.account && t.account.type === AccountType.CREDIT) {
       continue;
     }
-    
+
     const amount = t.amount.toNumber();
-    
+
     if (t.type === TransactionType.INCOME) {
       income += amount;
     } else if (t.type === TransactionType.EXPENSE) {
       const absAmount = Math.abs(amount);
       expenses += absAmount;
-      
+
       // Track largest expense
       if (!largestExpense || absAmount > largestExpense.amount) {
         largestExpense = {
@@ -1546,7 +1549,7 @@ export async function getMonthlyRecap(query: { householdId: string; month?: stri
           date: t.date,
         };
       }
-      
+
       // Track category totals
       if (t.categoryName) {
         const current = categoryTotals.get(t.categoryName) || { total: 0, count: 0 };
@@ -1594,7 +1597,7 @@ export async function getMonthlyRecap(query: { householdId: string; month?: stri
       const displayName = isCustomCategoryName(categoryName)
         ? (customNameMap.get(categoryName) ?? categoryName)
         : (CATEGORY_NAME_DISPLAY[categoryName as CategoryName] || categoryName);
-      
+
       topCategory = {
         categoryName,
         categoryDisplayName: displayName,
@@ -1653,7 +1656,7 @@ export async function getMonthlyRecap(query: { householdId: string; month?: stri
         const displayName = isCustomCategoryName(categoryName)
           ? (customNameMap.get(categoryName) ?? categoryName)
           : (CATEGORY_NAME_DISPLAY[categoryName as CategoryName] || categoryName);
-        
+
         return {
           categoryName,
           categoryDisplayName: displayName,
@@ -1674,7 +1677,7 @@ export async function getMonthlyRecap(query: { householdId: string; month?: stri
 export async function getSpendingHeatmap(householdId: string, month?: string) {
   // Default to current month if not provided
   const targetMonth = month || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
-  
+
   // Parse month (YYYY-MM) to start and end dates
   const [year, monthNum] = targetMonth.split('-').map(Number);
   const monthStart = new Date(year, monthNum - 1, 1);
@@ -1713,7 +1716,7 @@ export async function getSpendingHeatmap(householdId: string, month?: string) {
   // Convert to the expected format and fill in missing days
   const daysInMonth = new Date(year, monthNum, 0).getDate();
   const spendingMap = new Map<number, number>();
-  
+
   for (const row of dailySpending) {
     spendingMap.set(row.day, parseFloat(row.amount));
   }
@@ -1721,7 +1724,7 @@ export async function getSpendingHeatmap(householdId: string, month?: string) {
   // Build complete array with all days of the month
   const data: Array<{ day: number; amount: number }> = [];
   let total = 0;
-  
+
   for (let day = 1; day <= daysInMonth; day++) {
     const amount = spendingMap.get(day) || 0;
     data.push({ day, amount });
@@ -1760,18 +1763,18 @@ export async function calculateCreditCardInvoice(
 
   // Parse month (YYYY-MM) to start and end dates
   const [year, monthNum] = month.split('-').map(Number);
-  
+
   // Se closingDay estiver definido, usar período de fechamento; senão, usar mês completo
   let invoiceStart: Date;
   let invoiceEnd: Date;
   let previousPeriodStart: Date;
-  
+
   if (account.closingDay) {
     const closingDay = account.closingDay;
     // Período da fatura: do closingDay do mês anterior até o closingDay do mês atual (exclusive)
-    // Exemplo: se closingDay = 7 e month = 2024-02, a fatura é de 7/jan até 6/fev
+    // Exemplo: se closingDay = 8 e month = 2024-02, a fatura é de 8/jan até 7/fev
     invoiceStart = new Date(year, monthNum - 2, closingDay); // Mês anterior, dia de fechamento
-    invoiceEnd = new Date(year, monthNum - 1, closingDay - 1, 23, 59, 59, 999); // Mês atual, dia anterior ao fechamento
+    invoiceEnd = new Date(year, monthNum - 1, closingDay - 2, 23, 59, 59, 999); // Mês atual, dia anterior ao fechamento
     previousPeriodStart = new Date(year, monthNum - 3, closingDay); // Período anterior
   } else {
     // Comportamento padrão: mês completo (compatibilidade com contas antigas)
@@ -1779,6 +1782,11 @@ export async function calculateCreditCardInvoice(
     invoiceEnd = new Date(year, monthNum, 0, 23, 59, 59, 999);
     previousPeriodStart = new Date(year, monthNum - 2, 1);
   }
+
+  // Get payment transactions for this invoice period
+  // monthKey format: "YYYY-M" where M is 0-indexed (0-11)
+  const monthKey = `${year}-${monthNum - 1}`;
+  const technicalIdentifier = `invoice_pay:${accountId}:${monthKey}`;
 
   // Get all transactions of the credit card before the invoice period
   const previousTransactions = await prisma.transaction.findMany({
@@ -1795,7 +1803,7 @@ export async function calculateCreditCardInvoice(
   const previousNetExpenses = previousTransactions.reduce((sum: number, t) => {
     if (!t.categoryName) return sum;
     // Use transaction type if available, otherwise infer from category
-    const isIncome = t.type === TransactionType.INCOME || 
+    const isIncome = t.type === TransactionType.INCOME ||
       (t.type !== TransactionType.EXPENSE && getCategoriesByType(CategoryType.INCOME).includes(t.categoryName as any));
     if (isIncome) {
       return sum - t.amount.toNumber(); // Income decreases debt
@@ -1804,13 +1812,22 @@ export async function calculateCreditCardInvoice(
     }
   }, 0);
 
+
+
   // Get all payment transactions before the invoice period
-  const previousPayments = await prisma.transaction.findMany({
+  const allPayments = await prisma.transaction.findMany({
     where: {
       householdId,
       attachmentUrl: { startsWith: `invoice_pay:${accountId}:` },
-      date: { lt: invoiceStart },
     },
+  });
+
+  // Filter to only previous month keys
+  const previousPayments = allPayments.filter(t => {
+    const paymentMonthKey = t.attachmentUrl!.split(':')[2];
+    const [payYear, payMonth] = paymentMonthKey.split('-').map(Number);
+    const [currYear, currMonth] = monthKey.split('-').map(Number);
+    return payYear < currYear || (payYear === currYear && payMonth < currMonth);
   });
 
   const previousPaymentsTotal = previousPayments.reduce(
@@ -1821,7 +1838,7 @@ export async function calculateCreditCardInvoice(
   // Calculate previous balance based on transactions
   // Previous balance = all net expenses (expenses - income) before this month - all payments before this month
   let previousBalance = 0;
-  
+
   if (previousTransactions.length > 0) {
     // Calculate based on previous transactions (considering both expenses and income)
     previousBalance = Math.max(0, previousNetExpenses - previousPaymentsTotal);
@@ -1832,14 +1849,14 @@ export async function calculateCreditCardInvoice(
       where: {
         OR: [
           { accountId, householdId, date: { gte: invoiceStart, lte: invoiceEnd } },
-          { householdId, attachmentUrl: { startsWith: `invoice_pay:${accountId}:` }, date: { gte: invoiceStart, lte: invoiceEnd } },
+          { householdId, attachmentUrl: technicalIdentifier },
         ],
       },
     });
-    
+
     if (currentPeriodTransactions.length === 0) {
       // No transactions at all - use account balance as initial debt
-      previousBalance = Math.max(0, account.balance.toNumber());
+      previousBalance = 0
     } else {
       // Has transactions in current period but none before
       // Calculate net change in current period
@@ -1850,7 +1867,7 @@ export async function calculateCreditCardInvoice(
           currentPeriodNetChange -= t.amount.toNumber();
         } else if (t.accountId === accountId && t.categoryName) {
           // Use transaction type if available, otherwise infer from category
-          const isIncome = t.type === TransactionType.INCOME || 
+          const isIncome = t.type === TransactionType.INCOME ||
             (t.type !== TransactionType.EXPENSE && getCategoriesByType(CategoryType.INCOME).includes(t.categoryName as any));
           if (isIncome) {
             currentPeriodNetChange -= t.amount.toNumber(); // Income decreases debt
@@ -1858,11 +1875,14 @@ export async function calculateCreditCardInvoice(
             currentPeriodNetChange += t.amount.toNumber(); // Expense increases debt
           }
         }
+
+
       }
-      
+
       // Initial balance = current balance - current period net change
-      previousBalance = Math.max(0, account.balance.toNumber() - currentPeriodNetChange);
+      previousBalance = Math.max(0, currentPeriodNetChange)
     }
+
   }
 
   // Get current invoice period transactions (purchases in the period)
@@ -1880,7 +1900,7 @@ export async function calculateCreditCardInvoice(
   const currentNetExpenses = currentPeriodTransactions.reduce((sum: number, t) => {
     if (!t.categoryName) return sum;
     // Use transaction type if available, otherwise infer from category
-    const isIncome = t.type === TransactionType.INCOME || 
+    const isIncome = t.type === TransactionType.INCOME ||
       (t.type !== TransactionType.EXPENSE && getCategoriesByType(CategoryType.INCOME).includes(t.categoryName as any));
     if (isIncome) {
       return sum - t.amount.toNumber(); // Income decreases debt
@@ -1889,16 +1909,12 @@ export async function calculateCreditCardInvoice(
     }
   }, 0);
 
-  // Get payment transactions for this invoice period
-  // monthKey format: "YYYY-M" where M is 0-indexed (0-11)
-  const monthKey = `${year}-${monthNum - 1}`;
-  const technicalIdentifier = `invoice_pay:${accountId}:${monthKey}`;
-  
+
+
   const currentPayments = await prisma.transaction.findMany({
     where: {
       householdId,
       attachmentUrl: technicalIdentifier,
-      date: { gte: invoiceStart, lte: invoiceEnd },
     },
   });
 
@@ -1929,17 +1945,17 @@ export async function calculateCreditCardInvoice(
   // Build pagination args
   const allInvoiceTransactions = pagination?.cursor
     ? await prisma.transaction.findMany({
-        where: whereClause,
-        orderBy: { date: 'desc' },
-        take: limit + 1,
-        cursor: { id: pagination.cursor },
-        skip: 1,
-      })
+      where: whereClause,
+      orderBy: { date: 'desc' },
+      take: limit + 1,
+      cursor: { id: pagination.cursor },
+      skip: 1,
+    })
     : await prisma.transaction.findMany({
-        where: whereClause,
-        orderBy: { date: 'desc' },
-        take: limit + 1,
-      });
+      where: whereClause,
+      orderBy: { date: 'desc' },
+      take: limit + 1,
+    });
 
   // Check if there are more transactions
   const hasMore = allInvoiceTransactions.length > limit;
@@ -1948,6 +1964,7 @@ export async function calculateCreditCardInvoice(
 
   // Get total count for pagination info
   const totalCount = await prisma.transaction.count({ where: whereClause });
+
 
   return {
     data: {
@@ -2026,22 +2043,22 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
 
     // 3. Calculate invoice (inline calculation to avoid nested transactions)
     const [invoiceYear, invoiceMonthNum] = month.split('-').map(Number);
-    
+
     // Se closingDay estiver definido, usar período de fechamento; senão, usar mês completo
     let invoiceMonthStart: Date;
     let invoiceMonthEnd: Date;
-    
+
     if (creditCard.closingDay) {
       const closingDay = creditCard.closingDay;
-      // Período da fatura: do closingDay do mês anterior até o closingDay do mês atual (exclusive)
-      invoiceMonthStart = new Date(invoiceYear, invoiceMonthNum - 2, closingDay);
-      invoiceMonthEnd = new Date(invoiceYear, invoiceMonthNum - 1, closingDay - 1, 23, 59, 59, 999);
+      // Período da fatura: do closingDay do mês atual até o closingDay do mês seguinte (exclusive)
+      invoiceMonthStart = new Date(invoiceYear, invoiceMonthNum - 1, closingDay);
+      invoiceMonthEnd = new Date(invoiceYear, invoiceMonthNum, closingDay - 1, 23, 59, 59, 999);
     } else {
       // Comportamento padrão: mês completo
       invoiceMonthStart = new Date(invoiceYear, invoiceMonthNum - 1, 1);
       invoiceMonthEnd = new Date(invoiceYear, invoiceMonthNum, 0, 23, 59, 59, 999);
     }
-    
+
     // Get previous transactions
     const invoicePreviousTransactions = await tx.transaction.findMany({
       where: {
@@ -2056,7 +2073,7 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
     const invoicePreviousNetExpenses = invoicePreviousTransactions.reduce((sum: number, t) => {
       if (!t.categoryName) return sum;
       // Use transaction type if available, otherwise infer from category
-      const isIncome = t.type === TransactionType.INCOME || 
+      const isIncome = t.type === TransactionType.INCOME ||
         (t.type !== TransactionType.EXPENSE && getCategoriesByType(CategoryType.INCOME).includes(t.categoryName as any));
       if (isIncome) {
         return sum - t.amount.toNumber(); // Income decreases debt
@@ -2065,12 +2082,19 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
       }
     }, 0);
 
-    const invoicePreviousPayments = await tx.transaction.findMany({
+    const invoicePreviousPaymentsAll = await tx.transaction.findMany({
       where: {
         householdId: householdId!,
         attachmentUrl: { startsWith: `invoice_pay:${accountId}:` },
-        date: { lt: invoiceMonthStart },
       },
+    });
+
+    // Filter to only previous month keys
+    const invoicePreviousPayments = invoicePreviousPaymentsAll.filter(t => {
+      const paymentMonthKey = t.attachmentUrl!.split(':')[2];
+      const [payYear, payMonth] = paymentMonthKey.split('-').map(Number);
+      const [currYear, currMonth] = monthKey.split('-').map(Number);
+      return payYear < currYear || (payYear === currYear && payMonth < currMonth);
     });
 
     const invoicePreviousPaymentsTotal = invoicePreviousPayments.reduce(
@@ -2081,7 +2105,7 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
     // Calculate previous balance based on transactions
     // Previous balance = all expenses before this month - all payments before this month
     let invoicePreviousBalance = 0;
-    
+
     if (invoicePreviousTransactions.length > 0) {
       // Calculate based on previous transactions
       invoicePreviousBalance = Math.max(0, invoicePreviousNetExpenses - invoicePreviousPaymentsTotal);
@@ -2096,7 +2120,7 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
           ],
         },
       });
-      
+
       if (currentPeriodTransactions.length === 0) {
         // No transactions at all - use account balance as initial debt
         invoicePreviousBalance = Math.max(0, creditCard.balance.toNumber());
@@ -2105,21 +2129,21 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
         // Calculate net change in current period
         let currentPeriodNetChange = 0;
         for (const t of currentPeriodTransactions) {
-          if (t.attachmentUrl?.startsWith(`invoice_pay:${accountId}:`)) {
+          if (t.attachmentUrl?.startsWith(`invoice_pay:`)) {
             // Payment decreases debt
             currentPeriodNetChange -= t.amount.toNumber();
-        } else if (t.accountId === accountId && t.categoryName) {
-          // Use transaction type if available, otherwise infer from category
-          const isIncome = t.type === TransactionType.INCOME || 
-            (t.type !== TransactionType.EXPENSE && getCategoriesByType(CategoryType.INCOME).includes(t.categoryName as any));
-          if (isIncome) {
-            currentPeriodNetChange -= t.amount.toNumber(); // Income decreases debt
-          } else {
-            currentPeriodNetChange += t.amount.toNumber(); // Expense increases debt
+          } else if (t.accountId === accountId && t.categoryName) {
+            // Use transaction type if available, otherwise infer from category
+            const isIncome = t.type === TransactionType.INCOME ||
+              (t.type !== TransactionType.EXPENSE && getCategoriesByType(CategoryType.INCOME).includes(t.categoryName as any));
+            if (isIncome) {
+              currentPeriodNetChange -= t.amount.toNumber(); // Income decreases debt
+            } else {
+              currentPeriodNetChange += t.amount.toNumber(); // Expense increases debt
+            }
           }
         }
-      }
-        
+
         // Initial balance = current balance - current period net change
         invoicePreviousBalance = Math.max(0, creditCard.balance.toNumber() - currentPeriodNetChange);
       }
@@ -2139,7 +2163,7 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
     const invoiceCurrentNetExpenses = invoiceCurrentPeriodTransactions.reduce((sum: number, t) => {
       if (!t.categoryName) return sum;
       // Use transaction type if available, otherwise infer from category
-      const isIncome = t.type === TransactionType.INCOME || 
+      const isIncome = t.type === TransactionType.INCOME ||
         (t.type !== TransactionType.EXPENSE && getCategoriesByType(CategoryType.INCOME).includes(t.categoryName as any));
       if (isIncome) {
         return sum - t.amount.toNumber(); // Income decreases debt
@@ -2166,6 +2190,8 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
       0,
       invoicePreviousBalance + invoiceCurrentNetExpenses - invoiceCurrentPaymentsTotal
     );
+
+
 
     const invoice = {
       total: invoiceRemaining,
@@ -2217,7 +2243,7 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
         availableBalance: { decrement: amountToPay },
       },
     });
-    
+
     // Recalculate credit card limit after payment
     await recalculateCreditCardLimit(tx, accountId);
 
@@ -2243,6 +2269,7 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
     const updatedSourceAccount = await tx.account.findUnique({
       where: { id: sourceAccountId },
     });
+
 
     return {
       paymentTransaction,
@@ -2305,11 +2332,11 @@ export async function undoCreditCardPayment(
     const [year, monthIndex] = monthKey.split('-').map(Number);
     // monthIndex is 0-indexed (0-11), convert to 1-indexed for Date constructor
     const monthNum = monthIndex + 1;
-    
+
     // Se closingDay estiver definido, usar período de fechamento; senão, usar mês completo
     let monthStart: Date;
     let monthEnd: Date;
-    
+
     if (creditCard.closingDay) {
       const closingDay = creditCard.closingDay;
       monthStart = new Date(year, monthIndex - 1, closingDay); // Mês anterior, dia de fechamento
@@ -2330,7 +2357,7 @@ export async function undoCreditCardPayment(
         availableBalance: { increment: paymentAmount },
       },
     });
-    
+
     // Recalculate credit card limit after undoing payment
     await recalculateCreditCardLimit(tx, input.accountId);
 
