@@ -133,12 +133,43 @@ export async function authRoutes(app: FastifyInstance) {
           },
         },
       },
-      preHandler: authMiddleware({ requireEmailVerified: false }),
+      preHandler: [
+        // Log incoming request BEFORE auth middleware so we can debug calls in production
+        async (request, reply) => {
+          try {
+            const hasAuth = !!request.headers.authorization;
+            const body = request.body as { referralCode?: string } | undefined;
+            const referralCode = body?.referralCode;
+            console.log('[Auth] Incoming POST /auth/sync', {
+              method: request.method,
+              url: request.url,
+              hasAuthorization: hasAuth,
+              referralCodePresent: !!referralCode,
+            });
+          } catch (e) {
+            console.error('[Auth] Failed to log incoming /auth/sync', e);
+          }
+        },
+        authMiddleware({ requireEmailVerified: false }),
+      ],
     },
     async (request, reply) => {
       const authUser = getAuthUser(request);
       const body = request.body as { referralCode?: string } | undefined;
       const referralCode = body?.referralCode;
+
+      // Debug log to confirm frontend calls /auth/sync after Google login
+      if (!isProduction) {
+        try {
+          console.log('[Auth] POST /auth/sync called', {
+            uid: authUser?.uid,
+            email: authUser?.email,
+            referralCode,
+          });
+        } catch (e) {
+          console.error('[Auth] Failed to log /auth/sync call', e);
+        }
+      }
 
       // Create or get user
       const user = await getUserByFirebaseUid(authUser.uid, authUser.email);

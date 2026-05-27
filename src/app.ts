@@ -195,7 +195,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
       
       // Allow only exact recta.app production domains (avoid bypass via e.g. recta.app.evil.com)
-      const allowedRectaOrigins = ['https://recta.app', 'https://www.recta.app'];
+      const allowedRectaOrigins = ['https://recta.app', 'https://www.recta.app', 'https://rectabell.vercel.app'];
       if (allowedRectaOrigins.includes(origin)) {
         if (isProduction) {
           console.log(`[CORS] Allowing recta.app origin: ${origin}`);
@@ -228,6 +228,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Content-Length', 'X-JSON-Response-Body'],
+    maxAge: 86400, // Cache preflight for 24 hours
   });
 
   // Security headers
@@ -240,6 +242,9 @@ export async function buildApp(): Promise<FastifyInstance> {
         imgSrc: ["'self'", 'data:', 'https:'],
       },
     } : false,
+    // Allow cross-origin requests to work properly
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    referrerPolicy: { policy: 'no-referrer-when-downgrade' },
   });
 
   // Rate limiting
