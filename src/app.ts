@@ -412,4 +412,9 @@ export async function startServer(): Promise<void> {
   process.on('SIGINT', shutdown);
 }
 
+// Vercel compatibility: export a default server object when the platform imports this module
+const vercelApp = await buildApp();
+await vercelApp.ready();
+export default vercelApp.server;
+
 
