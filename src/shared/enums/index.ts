@@ -27,6 +27,13 @@ export enum TransactionType {
   EXPENSE = 'EXPENSE',
   TRANSFER = 'TRANSFER',
   ALLOCATION = 'ALLOCATION',
+  LOAN = 'LOAN',
+}
+
+export enum LoanStatus {
+  PENDING = 'PENDING',
+  PAID = 'PAID',
+  NOT_PAID = 'NOT_PAID',
 }
 
 export enum AccountStatus {

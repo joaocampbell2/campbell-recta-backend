@@ -6,7 +6,7 @@ import {
   buildPaginationArgs,
   parseMonthFilter,
 } from '../../shared/utils/pagination.js';
-import { CategoryType, getCategoriesByType, getCategoryColor, AccountType, TransactionType, CATEGORY_NAME_DISPLAY } from '../../shared/enums/index.js';
+import { CategoryType, getCategoriesByType, getCategoryColor, AccountType, TransactionType, LoanStatus, CATEGORY_NAME_DISPLAY } from '../../shared/enums/index.js';
 import { CategoryName } from '../../shared/enums/index.js';
 import { isCustomCategoryName, toCustomCategoryId, toCustomCategoryName } from '../../shared/utils/categoryHelpers.js';
 import { executeRecurringTransaction } from '../recurring-transactions/recurring-transactions.service.js';
@@ -37,6 +37,25 @@ function calculateBalanceChange(amount: number, isIncome: boolean, accountType: 
     return isIncome ? -amount : amount;
   }
   return isIncome ? amount : -amount;
+}
+
+function isCreditCardLoanTransaction(transaction: { type: string; loanId?: string | null; account?: { type?: string | null } | null }) {
+  return transaction.account?.type === AccountType.CREDIT
+    && (transaction.type === TransactionType.LOAN || !!transaction.loanId);
+}
+
+export function shouldExcludeFromPnl(transaction: { type: string; loanId?: string | null; loanStatus?: string | null; account?: { type?: string | null } | null }) {
+  if (isCreditCardLoanTransaction(transaction)) {
+    return false;
+  }
+
+  if (transaction.loanStatus === LoanStatus.PAID) {
+    return true;
+  }
+
+  return transaction.type === TransactionType.TRANSFER
+    || transaction.type === TransactionType.ALLOCATION
+    || !!transaction.loanId;
 }
 
 /**
@@ -155,8 +174,11 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
   }
 
   // Resolve transaction type: from input, or infer from category (system or custom)
-  let transactionType: TransactionType.INCOME | TransactionType.EXPENSE;
-  if (input.type === TransactionType.INCOME || input.type === TransactionType.EXPENSE) {
+  const loanStatus = input.loanStatus ?? LoanStatus.PENDING;
+  let transactionType: TransactionType;
+  if (input.type === TransactionType.LOAN) {
+    transactionType = loanStatus === LoanStatus.NOT_PAID ? TransactionType.EXPENSE : TransactionType.LOAN;
+  } else if (input.type === TransactionType.INCOME || input.type === TransactionType.EXPENSE) {
     transactionType = input.type;
   } else if (isCustomCategoryName(categoryName!)) {
     const customId = toCustomCategoryId(categoryName!)!;
@@ -177,7 +199,7 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
     const transaction = await tx.transaction.create({
       data: {
         householdId,
-        type: transactionType,
+        type: transactionType as any,
         accountId,
         categoryName,
         amount: new Prisma.Decimal(amount),
@@ -186,6 +208,9 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
         notes,
         paid: isPaid,
         isSplit: isSplit,
+        ...(input.loanPersonName && { loanPersonName: input.loanPersonName }),
+        ...(input.loanId && { loanId: input.loanId }),
+        ...(loanStatus && { loanStatus }),
         ...(input.recurringTransactionId && { recurringTransactionId: input.recurringTransactionId }),
         ...(input.installmentId && { installmentId: input.installmentId }),
         ...(input.installmentNumber && { installmentNumber: input.installmentNumber }),
@@ -293,9 +318,14 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
       }
     }
 
-    // Update account balance only if transaction is paid
-    // transactionType is always INCOME or EXPENSE here (createTransaction doesn't handle TRANSFER/ALLOCATION)
-    if (isPaid && account && categoryName && accountId) {
+    // Update account balance only if the transaction should affect the account balance
+    const shouldAffectBalance = isPaid
+      && account
+      && accountId
+      && !input.loanId
+      && ![LoanStatus.PAID].includes(loanStatus);
+
+    if (shouldAffectBalance) {
       // If there are splits and transaction is paid, each member should pay from their own account
       if (isSplit && input.splits && input.splits.length > 0) {
         // For each split, create a transaction in the member's personal account
@@ -399,7 +429,7 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
             await tx.transaction.create({
               data: {
                 householdId: personalHousehold.id,
-                type: transactionType,
+                type: transactionType as any,
                 accountId: memberAccount.id,
                 categoryName,
                 amount: new Prisma.Decimal(splitAmount),
@@ -423,7 +453,7 @@ export async function createTransaction(input: CreateTransactionInput, userId?: 
 
         // Don't debit from the original account if splits are used - each member pays from their own account
         // The main transaction is just a record of the split
-      } else {
+      } else if (account) {
         // Normal transaction without splits - debit from original account
         const balanceChange = calculateBalanceChange(amount, isIncomeForBalance(transactionType), account.type);
 
@@ -630,7 +660,7 @@ export async function listTransactions(query: ListTransactionsQuery) {
     ...(categoryName && { categoryName }),
     // Support TransactionType filter (TRANSFER, ALLOCATION, INCOME, EXPENSE)
     ...(type && {
-      type: type as TransactionType,
+      type: type as any,
     }),
     ...(dateFilter && { date: dateFilter }),
     ...(search && {
@@ -748,6 +778,8 @@ export async function updateTransaction(
   // Calculate balance adjustments
   const oldAmount = existingTransaction.amount.toNumber();
   const newAmount = input.amount ?? oldAmount;
+  const oldLoanStatus = (existingTransaction as typeof existingTransaction & { loanStatus?: LoanStatus | null }).loanStatus ?? LoanStatus.PENDING;
+  const newLoanStatus = input.loanStatus ?? oldLoanStatus;
   const oldAccountId = existingTransaction.accountId;
   const newAccountId = input.accountId ?? oldAccountId;
   const oldPaid = existingTransaction.paid !== false; // undefined or true = paid
@@ -845,12 +877,13 @@ export async function updateTransaction(
       data: {
         ...(input.accountId && { accountId: input.accountId }),
         ...(input.categoryName && { categoryName: input.categoryName }),
-        ...(input.type && { type: input.type }), // Update type if provided
+        ...(input.type && { type: input.type as any }), // Update type if provided
         ...(input.amount !== undefined && { amount: new Prisma.Decimal(input.amount) }),
         ...(input.description !== undefined && { description: input.description }),
         ...(input.date && { date: input.date }),
         ...(input.notes !== undefined && { notes: input.notes }),
         ...(input.paid !== undefined && { paid: input.paid }),
+        ...(input.loanStatus !== undefined && { loanStatus: input.loanStatus }),
         ...(input.recurringTransactionId !== undefined && { recurringTransactionId: input.recurringTransactionId }),
         ...(input.installmentId !== undefined && { installmentId: input.installmentId }),
         ...(input.installmentNumber !== undefined && { installmentNumber: input.installmentNumber }),
@@ -865,8 +898,11 @@ export async function updateTransaction(
     });
 
     // Recalculate credit card limit if transaction is on a credit card
-    if (transaction.account?.type === AccountType.CREDIT) {
-      await recalculateCreditCardLimit(tx, transaction.account.id);
+    const transactionAccount = transaction.accountId
+      ? await tx.account.findUnique({ where: { id: transaction.accountId }, select: { id: true, type: true } })
+      : null;
+    if (transactionAccount?.type === AccountType.CREDIT) {
+      await recalculateCreditCardLimit(tx, transactionAccount.id);
     }
 
     return transaction;
@@ -874,7 +910,11 @@ export async function updateTransaction(
 
   // If transaction was marked as paid and it's from a recurring transaction on a credit card,
   // automatically process the recurring transaction for the next few months
-  if (paidChanged && !oldPaid && newPaid && result.recurringTransactionId && result.account?.type === AccountType.CREDIT) {
+  const resultAccount = result.accountId
+    ? await prisma.account.findUnique({ where: { id: result.accountId }, select: { id: true, type: true } })
+    : null;
+
+  if (paidChanged && !oldPaid && newPaid && result.recurringTransactionId && resultAccount?.type === AccountType.CREDIT) {
     try {
       const recurring = await prisma.recurringTransaction.findUnique({
         where: { id: result.recurringTransactionId },
@@ -978,9 +1018,12 @@ export async function updateTransaction(
   // Check budget thresholds and create notifications if needed (async, don't block)
   // Only check for expense transactions with a category that are paid
   const finalCategoryName = newCategoryName;
-  const finalTransactionType = getCategoriesByType(CategoryType.INCOME).includes(finalCategoryName as any)
-    ? TransactionType.INCOME
-    : TransactionType.EXPENSE;
+  const resolvedStatus = newLoanStatus ?? LoanStatus.PENDING;
+  const finalTransactionType = (input.type === TransactionType.LOAN && resolvedStatus === LoanStatus.NOT_PAID)
+    ? TransactionType.EXPENSE
+    : (getCategoriesByType(CategoryType.INCOME).includes(finalCategoryName as any)
+      ? TransactionType.INCOME
+      : TransactionType.EXPENSE);
 
   if (finalTransactionType === TransactionType.EXPENSE && finalCategoryName && newPaid) {
     try {
@@ -1002,6 +1045,9 @@ export async function updateTransaction(
   return convertedResult;
 }
 
+export async function importTransactionsFromCSV() {
+  throw new Error('Not implemented');
+}
 
 /**
  * Delete transaction and revert account balance
@@ -1367,15 +1413,13 @@ export async function getTransactionSummary(query: TransactionSummaryQuery) {
   let expenses = 0;
 
   for (const t of transactions) {
-    // Exclude transfers and allocations from income/expense calculations
-    if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) {
+    // Exclude transfers, allocations, loans, and linked repayments from income/expense calculations
+    if (shouldExcludeFromPnl(t)) {
       continue;
     }
 
-    // Exclude credit card transactions from P&L calculations
-    // Credit card expenses don't represent actual cash outflow until the invoice is paid
-    // The real expense is recorded when paying the invoice via a bank account transaction
-    if (t.account && t.account.type === AccountType.CREDIT) {
+    // Exclude regular credit card transactions from P&L calculations, but keep loan transactions on credit cards
+    if (t.account && t.account.type === AccountType.CREDIT && !isCreditCardLoanTransaction(t)) {
       continue;
     }
 
@@ -1527,7 +1571,7 @@ export async function getMonthlyRecap(query: { householdId: string; month?: stri
       continue;
     }
 
-    if (t.account && t.account.type === AccountType.CREDIT) {
+    if (t.account && t.account.type === AccountType.CREDIT && !isCreditCardLoanTransaction(t)) {
       continue;
     }
 
@@ -1564,10 +1608,10 @@ export async function getMonthlyRecap(query: { householdId: string; month?: stri
   let prevIncome = 0;
   let prevExpenses = 0;
   for (const t of prevTransactions) {
-    if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) {
+    if (shouldExcludeFromPnl(t)) {
       continue;
     }
-    if (t.account && t.account.type === AccountType.CREDIT) {
+    if (t.account && t.account.type === AccountType.CREDIT && !isCreditCardLoanTransaction(t)) {
       continue;
     }
     const amount = t.amount.toNumber();
@@ -1770,11 +1814,11 @@ export async function calculateCreditCardInvoice(
 
   if (account.closingDay) {
     const closingDay = account.closingDay;
-    // Período da fatura: do closingDay do mês anterior até o closingDay do mês atual (exclusive)
-    // Exemplo: se closingDay = 8 e month = 2024-02, a fatura é de 8/jan até 7/fev
-    invoiceStart = new Date(year, monthNum - 2, closingDay); // Mês anterior, dia de fechamento
-    invoiceEnd = new Date(year, monthNum - 1, closingDay - 2, 23, 59, 59, 999); // Mês atual, dia anterior ao fechamento
-    previousPeriodStart = new Date(year, monthNum - 3, closingDay); // Período anterior
+    // Período da fatura: do closingDay do mês atual até o closingDay do mês seguinte (exclusive)
+    // Exemplo: se closingDay = 8 e month = 2024-04, a fatura é de 8/abr até 7/mai
+    invoiceStart = new Date(year, monthNum - 1, closingDay); // Mês atual, dia de fechamento
+    invoiceEnd = new Date(year, monthNum, closingDay - 1, 23, 59, 59, 999); // Mês seguinte, dia anterior ao fechamento
+    previousPeriodStart = new Date(year, monthNum - 2, closingDay); // Período anterior
   } else {
     // Comportamento padrão: mês completo (compatibilidade com contas antigas)
     invoiceStart = new Date(year, monthNum - 1, 1);
@@ -1837,6 +1881,8 @@ export async function calculateCreditCardInvoice(
   // Calculate previous balance based on transactions
   // Previous balance = all net expenses (expenses - income) before this month - all payments before this month
   let previousBalance = 0;
+  console.log('Previous net expenses:', previousTransactions);
+  console.log('Previous net receita:', previousPayments);
 
   if (previousTransactions.length > 0) {
     // Calculate based on previous transactions (considering both expenses and income)
@@ -1848,10 +1894,11 @@ export async function calculateCreditCardInvoice(
       where: {
         OR: [
           { accountId, householdId, date: { gte: invoiceStart, lte: invoiceEnd } },
-          { householdId, attachmentUrl: technicalIdentifier },
+          { householdId, attachmentUrl:  technicalIdentifier   },
         ],
       },
     });
+    console.log('Previous net expenses:', currentPeriodTransactions);
 
     if (currentPeriodTransactions.length === 0) {
       // No transactions at all - use account balance as initial debt
@@ -1908,7 +1955,7 @@ export async function calculateCreditCardInvoice(
     }
   }, 0);
 
-
+  
 
   const currentPayments = await prisma.transaction.findMany({
     where: {

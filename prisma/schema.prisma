@@ -195,6 +195,13 @@ enum TransactionType {
   EXPENSE
   TRANSFER
   ALLOCATION
+  LOAN
+}
+
+enum LoanStatus {
+  PENDING
+  PAID
+  NOT_PAID
 }
 
 enum AccountStatus {
@@ -271,6 +278,10 @@ model Transaction {
   relatedEntityId        String?         @map("related_entity_id") @db.Uuid // ID da entidade relacionada (ex: cartão de crédito para ALLOCATION)
   // Recurring transaction reference
   recurringTransactionId String?         @map("recurring_transaction_id") @db.Uuid
+  // Loan fields
+  loanPersonName         String?         @map("loan_person_name") @db.VarChar(255)
+  loanId                 String?         @map("loan_id") @db.Uuid
+  loanStatus             LoanStatus?     @default(PENDING) @map("loan_status")
   // Installment fields
   installmentId          String?         @map("installment_id")
   installmentNumber      Int?            @map("installment_number")

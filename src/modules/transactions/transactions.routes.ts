@@ -26,7 +26,6 @@ import {
 import { updateTransactionSplitSchema } from './transaction-splits.schema.js';
 import * as transactionsService from './transactions.service.js';
 import * as transactionSplitsService from './transaction-splits.service.js';
-
 export async function transactionRoutes(app: FastifyInstance) {
   // All routes require authentication
   app.addHook('preHandler', authMiddleware());
@@ -69,10 +68,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const query = listTransactionsQuerySchema.parse(request.query);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = query.householdId || await ensurePersonalHousehold(request);
-    
+
     await requireHouseholdMember(request, householdId);
 
     const result = await transactionsService.listTransactions({ ...query, householdId });
@@ -111,10 +110,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const query = transactionSummaryQuerySchema.parse(request.query);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = query.householdId || await ensurePersonalHousehold(request);
-    
+
     await requireHouseholdMember(request, householdId);
 
     const summary = await transactionsService.getTransactionSummary({ ...query, householdId });
@@ -153,10 +152,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const query = transactionSummaryQuerySchema.parse(request.query);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = query.householdId || await ensurePersonalHousehold(request);
-    
+
     await requireHouseholdMember(request, householdId);
 
     const breakdown = await transactionsService.getSpendingByCategory({ ...query, householdId });
@@ -196,15 +195,15 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const query = monthlyRecapQuerySchema.parse(request.query);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = query.householdId || await ensurePersonalHousehold(request);
-    
+
     await requireHouseholdMember(request, householdId);
 
-    const recap = await transactionsService.getMonthlyRecap({ 
-      householdId, 
-      month: query.month 
+    const recap = await transactionsService.getMonthlyRecap({
+      householdId,
+      month: query.month
     });
 
     return reply.send({
@@ -260,10 +259,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const query = heatmapQuerySchema.parse(request.query);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = query.householdId || await ensurePersonalHousehold(request);
-    
+
     await requireHouseholdMember(request, householdId);
 
     const heatmapData = await transactionsService.getSpendingHeatmap(
@@ -306,14 +305,14 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const input = createTransactionSchema.parse(request.body);
-    
+
     // Get authenticated user
     const authUser = getAuthUser(request);
     const user = await getUserByFirebaseUid(authUser.uid, authUser.email);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = input.householdId || await ensurePersonalHousehold(request);
-    
+
     // Verify user has access to the household
     await requireEditor(request, householdId);
 
@@ -357,10 +356,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const input = batchCreateTransactionsSchema.parse(request.body);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = input.householdId || await ensurePersonalHousehold(request);
-    
+
     // Verify user has access to the household
     await requireEditor(request, householdId);
 
@@ -574,7 +573,7 @@ export async function transactionRoutes(app: FastifyInstance) {
           },
         },
         response: {
-         200: {
+          200: {
             type: 'object',
             properties: {
               success: { type: 'boolean' },
@@ -593,12 +592,14 @@ export async function transactionRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      
+      
       const params = creditCardInvoiceParamsSchema.parse(request.params);
       const query = request.query as any;
-      
+
       // If no householdId provided, ensure user has a personal household
       const householdId = query.householdId || await ensurePersonalHousehold(request);
-      
+
       await requireHouseholdMember(request, householdId);
 
       const invoice = await transactionsService.calculateCreditCardInvoice(
@@ -665,10 +666,10 @@ export async function transactionRoutes(app: FastifyInstance) {
         ...(request.body as any),
         accountId, // Add accountId from params
       });
-      
+
       // If no householdId provided, ensure user has a personal household
       const householdId = body.householdId || await ensurePersonalHousehold(request);
-      
+
       await requireEditor(request, householdId);
 
       const result = await transactionsService.payCreditCardInvoice({
@@ -716,7 +717,7 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const params = undoPaymentParamsSchema.parse(request.params);
-      
+
       // Get transaction to verify household access
       const paymentTransaction = await transactionsService.getTransaction(params.transactionId);
       await requireEditor(request, paymentTransaction.householdId);
@@ -767,10 +768,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const input = createTransferSchema.parse(request.body);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = input.householdId || await ensurePersonalHousehold(request);
-    
+
     // Verify user has access to the household
     await requireEditor(request, householdId);
 
@@ -819,10 +820,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const input = createAllocationSchema.parse(request.body);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = input.householdId || await ensurePersonalHousehold(request);
-    
+
     // Verify user has access to the household
     await requireEditor(request, householdId);
 
@@ -867,10 +868,10 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const input = createDeallocationSchema.parse(request.body);
-    
+
     // If no householdId provided, ensure user has a personal household
     const householdId = input.householdId || await ensurePersonalHousehold(request);
-    
+
     // Verify user has access to the household
     await requireEditor(request, householdId);
 
@@ -922,12 +923,12 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { transactionId } = transactionIdParamSchema.parse(request.params);
-      
+
       // Get householdId from query or use personal household
       const queryParams = request.query as { householdId?: string } | undefined;
       const queryHouseholdId = queryParams?.householdId;
       const householdId = queryHouseholdId || await ensurePersonalHousehold(request);
-      
+
       // Verify user is a member of the household
       await requireHouseholdMember(request, householdId);
 
@@ -981,7 +982,7 @@ export async function transactionRoutes(app: FastifyInstance) {
       const { splitId } = request.params;
       const authUser = getAuthUser(request);
       const user = await getUserByFirebaseUid(authUser.uid, authUser.email);
-      
+
       const input = updateTransactionSplitSchema.parse(request.body);
 
       const split = await transactionSplitsService.updateTransactionSplit(splitId, user.id, input);

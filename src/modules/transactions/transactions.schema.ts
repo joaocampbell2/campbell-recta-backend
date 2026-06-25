@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { paginationSchema, monthFilterSchema } from '../../shared/utils/pagination.js';
-import { CategoryName, TransactionType } from '../../shared/enums/index.js';
+import { CategoryName, TransactionType, LoanStatus } from '../../shared/enums/index.js';
 import { localDateSchema } from '../../shared/utils/dateSchema.js';
 import { categoryNameSchema } from '../categories/categories.schema.js';
 
@@ -39,6 +39,10 @@ export const createTransactionSchema = z.object({
   toAccountId: uuidOrEmpty, // Required for TRANSFER
   // Allocation fields
   relatedEntityId: uuidOrEmpty, // Required for ALLOCATION (credit card ID)
+  // Loan fields
+  loanPersonName: z.string().max(255).optional(),
+  loanId: uuidOrEmpty,
+  loanStatus: z.nativeEnum(LoanStatus).optional().default(LoanStatus.PENDING),
   recurringTransactionId: uuidOrEmpty,
   installmentId: z.string().optional(),
   installmentNumber: z.number().int().positive().optional(),
@@ -56,6 +60,10 @@ export const createTransactionSchema = z.object({
   if (data.type === TransactionType.ALLOCATION) {
     return !!data.accountId && !!data.relatedEntityId;
   }
+  // If type is LOAN, accountId and loanPersonName are required
+  if (data.type === TransactionType.LOAN) {
+    return !!data.accountId && !!data.loanPersonName;
+  }
   // If type is INCOME or EXPENSE, accountId and categoryName are required
   if (data.type === TransactionType.INCOME || data.type === TransactionType.EXPENSE) {
     return !!data.accountId && !!data.categoryName;
@@ -71,8 +79,8 @@ export const createTransactionSchema = z.object({
       return false;
     }
     // Validate that splits only apply to EXPENSE transactions
-    // Cannot split TRANSFER, ALLOCATION, or INCOME
-    if (data.type === TransactionType.TRANSFER || data.type === TransactionType.ALLOCATION || data.type === TransactionType.INCOME) {
+    // Cannot split TRANSFER, ALLOCATION, INCOME, or LOAN
+    if (data.type === TransactionType.TRANSFER || data.type === TransactionType.ALLOCATION || data.type === TransactionType.INCOME || data.type === TransactionType.LOAN) {
       return false;
     }
     // If type is not specified, check categoryName to infer type (expense categories)
@@ -119,6 +127,9 @@ export const updateTransactionSchema = z.object({
   installmentNumber: z.number().int().positive().nullable().optional(),
   totalInstallments: z.number().int().positive().nullable().optional(),
   attachmentUrl: z.string().max(500).nullable().optional(), // Pode ser URL ou identificador técnico (ex: invoice_pay:xxx:xxx)
+  loanPersonName: z.string().max(255).nullable().optional(),
+  loanId: z.string().uuid().nullable().optional(),
+  loanStatus: z.nativeEnum(LoanStatus).nullable().optional(),
 });
 
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
