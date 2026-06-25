@@ -42,7 +42,7 @@ export const createTransactionSchema = z.object({
   // Loan fields
   loanPersonName: z.string().max(255).optional(),
   loanId: uuidOrEmpty,
-  loanStatus: z.nativeEnum(LoanStatus).optional().default(LoanStatus.PENDING),
+  loanStatus: z.nativeEnum(LoanStatus).optional(),
   recurringTransactionId: uuidOrEmpty,
   installmentId: z.string().optional(),
   installmentNumber: z.number().int().positive().optional(),

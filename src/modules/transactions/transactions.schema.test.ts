@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTransactionSchema } from './transactions.schema.js';
-import { TransactionType } from '../../shared/enums/index.js';
+import { TransactionType, CategoryName } from '../../shared/enums/index.js';
 
 test('createTransactionSchema accepts loan transactions with a borrower name', () => {
   const parsed = createTransactionSchema.parse({
@@ -34,4 +34,20 @@ test('createTransactionSchema accepts loan repayment income linked to a loan', (
   });
 
   assert.equal(parsed.loanId, '33333333-3333-3333-3333-333333333333');
+});
+
+test('createTransactionSchema accepts expense transactions without an explicit loanStatus', () => {
+  const parsed = createTransactionSchema.parse({
+    householdId: '11111111-1111-1111-1111-111111111111',
+    type: TransactionType.EXPENSE,
+    accountId: '22222222-2222-2222-2222-222222222222',
+    categoryName: CategoryName.OTHER_EXPENSES,
+    amount: 10,
+    description: 'Despesa simples',
+    date: '2026-06-25',
+    paid: true,
+    isSplit: false,
+  });
+
+  assert.equal(parsed.loanStatus, undefined);
 });
