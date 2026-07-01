@@ -97,10 +97,14 @@ export async function buildApp(): Promise<FastifyInstance> {
       },
       servers: [
         {
+          url: '/',
+          description: 'Current Host (Relative URL)',
+        },
+        {
           url: isProduction
             ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'your-railway-app.up.railway.app'}`
             : `http://localhost:${env.PORT}`,
-          description: isProduction ? 'Production server' : 'Development server',
+          description: isProduction ? 'Production server (Railway)' : 'Development server',
         },
       ],
       components: {
