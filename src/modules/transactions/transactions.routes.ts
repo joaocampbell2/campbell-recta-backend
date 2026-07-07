@@ -22,6 +22,7 @@ import {
   createDeallocationSchema,
   monthlyRecapQuerySchema,
   heatmapQuerySchema,
+  listInstallmentTransactionsQuerySchema,
 } from './transactions.schema.js';
 import { updateTransactionSplitSchema } from './transaction-splits.schema.js';
 import * as transactionsService from './transactions.service.js';
@@ -274,6 +275,100 @@ export async function transactionRoutes(app: FastifyInstance) {
     return reply.send({
       success: true,
       data: heatmapData,
+    });
+  });
+
+  /**
+   * GET /transactions/installments
+   * Get all installment purchases of a household (grouped by installmentId)
+   */
+  app.get('/installments', {
+    schema: {
+      description: 'Get all installment purchases of a household (grouped)',
+      tags: ['Transactions'],
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: {
+          householdId: { type: 'string', format: 'uuid' },
+          limit: { type: 'number', minimum: 1, maximum: 100 },
+          cursor: { type: 'string' },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            data: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  installmentId: { type: 'string' },
+                  description: { type: 'string' },
+                  totalAmount: { type: 'number' },
+                  installmentAmount: { type: 'number' },
+                  account: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string', format: 'uuid' },
+                      name: { type: 'string' },
+                      type: { type: 'string' },
+                    },
+                  },
+                  endDate: { type: 'string', format: 'date-time' },
+                  totalInstallments: { type: 'number' },
+                  paidInstallmentsCount: { type: 'number' },
+                  progress: { type: 'string' },
+                  passedInstallmentsCount: { type: 'number' },
+                  passedProgress: { type: 'string' },
+                  transactions: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        date: { type: 'string', format: 'date-time' },
+                        installmentNumber: { type: 'number' },
+                        paid: { type: 'boolean' },
+                        amount: { type: 'number' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            pagination: {
+              type: 'object',
+              properties: {
+                nextCursor: { type: ['string', 'null'] },
+                hasMore: { type: 'boolean' },
+                total: { type: 'number' },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const query = listInstallmentTransactionsQuerySchema.parse(request.query);
+    
+    // If no householdId provided, ensure user has a personal household
+    const householdId = query.householdId || await ensurePersonalHousehold(request);
+    
+    await requireHouseholdMember(request, householdId);
+
+    const result = await transactionsService.listInstallmentTransactions({
+      householdId,
+      limit: query.limit,
+      cursor: query.cursor,
+    });
+
+    return reply.send({
+      success: true,
+      ...result,
     });
   });
 

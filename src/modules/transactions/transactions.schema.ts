@@ -293,5 +293,15 @@ export const heatmapQuerySchema = z.object({
 
 export type HeatmapQuery = z.infer<typeof heatmapQuerySchema>;
 
+/**
+ * List installment transactions query
+ */
+export const listInstallmentTransactionsQuerySchema = paginationSchema.extend({
+  householdId: z.string().uuid().optional(), // Optional - will use personal household if not provided
+});
+
+export type ListInstallmentTransactionsQuery = z.infer<typeof listInstallmentTransactionsQuerySchema>;
+
+
 
 

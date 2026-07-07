@@ -21,6 +21,7 @@ import type {
   PayInvoiceInput,
   CreditCardInvoiceParams,
   UndoPaymentParams,
+  ListInstallmentTransactionsQuery,
 } from './transactions.schema.js';
 
 /**
@@ -1773,7 +1774,7 @@ export async function calculateCreditCardInvoice(
     // Período da fatura: do closingDay do mês anterior até o closingDay do mês atual (exclusive)
     // Exemplo: se closingDay = 8 e month = 2024-02, a fatura é de 8/jan até 7/fev
     invoiceStart = new Date(year, monthNum - 2, closingDay); // Mês anterior, dia de fechamento
-    invoiceEnd = new Date(year, monthNum - 1, closingDay - 2, 23, 59, 59, 999); // Mês atual, dia anterior ao fechamento
+    invoiceEnd = new Date(year, monthNum - 1, closingDay - 1, 23, 59, 59, 999); // Mês atual, dia anterior ao fechamento
     previousPeriodStart = new Date(year, monthNum - 3, closingDay); // Período anterior
   } else {
     // Comportamento padrão: mês completo (compatibilidade com contas antigas)
@@ -2049,9 +2050,10 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
 
     if (creditCard.closingDay) {
       const closingDay = creditCard.closingDay;
-      // Período da fatura: do closingDay do mês atual até o closingDay do mês seguinte (exclusive)
-      invoiceMonthStart = new Date(invoiceYear, invoiceMonthNum - 1, closingDay);
-      invoiceMonthEnd = new Date(invoiceYear, invoiceMonthNum, closingDay - 1, 23, 59, 59, 999);
+      // Período da fatura: do closingDay do mês anterior até o closingDay do mês atual (exclusive)
+      // Exemplo: se closingDay = 8 e month = 2024-02, a fatura é de 8/jan até 7/fev
+      invoiceMonthStart = new Date(invoiceYear, invoiceMonthNum - 2, closingDay);
+      invoiceMonthEnd = new Date(invoiceYear, invoiceMonthNum - 1, closingDay - 1, 23, 59, 59, 999);
     } else {
       // Comportamento padrão: mês completo
       invoiceMonthStart = new Date(invoiceYear, invoiceMonthNum - 1, 1);
@@ -2663,5 +2665,123 @@ export async function createDeallocation(input: {
     ...result,
     amount: result.amount.toNumber(),
   };
+}
+
+/**
+ * List all installment-based transactions for a household, grouped by installmentId
+ */
+export async function listInstallmentTransactions(query: ListInstallmentTransactionsQuery) {
+  const { householdId, cursor, limit } = query;
+
+  // 1. Fetch all transactions for this household that have an installmentId
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      householdId,
+      installmentId: { not: null },
+    },
+    include: {
+      account: {
+        select: { id: true, name: true, type: true },
+      },
+    },
+  });
+
+  // 2. Group transactions by installmentId in memory
+  const groupsMap = new Map<string, typeof transactions>();
+  for (const t of transactions) {
+    const key = t.installmentId!;
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, []);
+    }
+    groupsMap.get(key)!.push(t);
+  }
+
+  // 3. Process each group to build the response objects
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const installmentPurchases = Array.from(groupsMap.entries()).map(([installmentId, group]) => {
+    // Sort transactions by installmentNumber ascending
+    const sortedGroup = [...group].sort((a, b) => {
+      const numA = a.installmentNumber ?? 0;
+      const numB = b.installmentNumber ?? 0;
+      return numA - numB;
+    });
+
+    const firstTx = sortedGroup[0]!;
+    
+    // Calculate total amount (sum of all installments)
+    const totalAmount = sortedGroup.reduce((sum, t) => sum + t.amount.toNumber(), 0);
+    // Value of a single installment
+    const installmentAmount = firstTx.amount.toNumber();
+    
+    // Account details where the installment is billed
+    const account = firstTx.account ? {
+      id: firstTx.account.id,
+      name: firstTx.account.name,
+      type: firstTx.account.type,
+    } : null;
+
+    // The date of the last installment (end date)
+    const lastTx = sortedGroup[sortedGroup.length - 1]!;
+    const endDate = lastTx.date;
+
+    // Total expected installments
+    const totalInstallments = firstTx.totalInstallments ?? sortedGroup.length;
+
+    // Count paid installments (paid === true)
+    const paidInstallmentsCount = sortedGroup.filter(t => t.paid).length;
+    const progress = `${paidInstallmentsCount}/${totalInstallments}`;
+
+    // Count installments that have already passed (date <= today)
+    const passedInstallmentsCount = sortedGroup.filter(t => new Date(t.date) <= todayStart).length;
+    const passedProgress = `${passedInstallmentsCount}/${totalInstallments}`;
+
+    // Format individual transactions in the group
+    const formattedTransactions = sortedGroup.map(t => ({
+      id: t.id,
+      date: t.date,
+      installmentNumber: t.installmentNumber,
+      paid: t.paid,
+      amount: t.amount.toNumber(),
+    }));
+
+    return {
+      id: installmentId, // acts as the unique identifier for pagination
+      installmentId,
+      description: firstTx.description || `Parcela ${firstTx.installmentNumber}/${totalInstallments}`,
+      totalAmount,
+      installmentAmount,
+      account,
+      endDate,
+      totalInstallments,
+      paidInstallmentsCount,
+      progress,
+      passedInstallmentsCount,
+      passedProgress,
+      transactions: formattedTransactions,
+      // For sorting groups by the date of the first installment
+      firstInstallmentDate: firstTx.date,
+    };
+  });
+
+  // 4. Sort grouped installment purchases by the date of their first installment descending
+  installmentPurchases.sort((a, b) => b.firstInstallmentDate.getTime() - a.firstInstallmentDate.getTime());
+
+  // 5. Apply cursor-based pagination
+  const total = installmentPurchases.length;
+  let startIndex = 0;
+  
+  if (cursor) {
+    const cursorIndex = installmentPurchases.findIndex(item => item.id === cursor);
+    if (cursorIndex !== -1) {
+      startIndex = cursorIndex + 1;
+    }
+  }
+
+  const slicedItems = installmentPurchases.slice(startIndex, startIndex + limit + 1);
+
+  // Return the paginated response
+  return createPaginatedResponse(slicedItems, limit, total);
 }
 
