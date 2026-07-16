@@ -2249,14 +2249,15 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
     await recalculateCreditCardLimit(tx, accountId);
 
     // 8. Mark credit card transactions in the month as paid
-    // Only unpaid transactions that are part of the invoice
     await tx.transaction.updateMany({
       where: {
         accountId,
         householdId: householdId!,
         date: { gte: invoiceMonthStart, lte: invoiceMonthEnd },
-        paid: false,
-        attachmentUrl: { equals: null }, // Only purchases, not payments
+        OR: [
+          { attachmentUrl: null },
+          { attachmentUrl: { not: { startsWith: 'invoice_pay:' } } }
+        ]
       },
       data: {
         paid: true,
