@@ -29,7 +29,9 @@ You can run this backend on any Node.js host. Some options:
 - **[DigitalOcean App Platform](https://www.digitalocean.com/products/app-platform)** – managed app + DB
 - **VPS** (Hetzner, Linode, etc.) – run `npm run start` behind Nginx and use a managed PostgreSQL (e.g. Supabase, Neon, or self-hosted)
 
-Set `DATABASE_URL`, Firebase credentials, and (in production) `ALLOWED_ORIGINS` and optionally `SWAGGER_USERNAME`/`SWAGGER_PASSWORD`. For recurring transactions, schedule `npm run cron:process-recurrences` once per day (cron job or Railway cron).
+Set `DATABASE_URL`, pick an [auth mode](#auth-mode) and, in production, `ALLOWED_ORIGINS` and optionally `SWAGGER_USERNAME`/`SWAGGER_PASSWORD`. For recurring transactions, schedule `npm run cron:process-recurrences` once per day (cron job or Railway cron).
+
+You don't need Firebase to run a working instance — `local` auth mode plus PostgreSQL is enough.
 
 ## How to run
 
@@ -56,7 +58,21 @@ Edit `.env`:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL URL, e.g. `postgresql://user:password@localhost:5432/recta` |
-| Firebase | Yes* | Use **one** of the options below |
+| `AUTH_MODE` | Yes | `local` (no Firebase) or `firebase` (default). See below. |
+
+#### Auth mode
+
+Choose how users sign in via `AUTH_MODE`:
+
+- **`local`** (recommended for self-host) — no third-party auth. The backend issues and verifies its
+  own JWTs for email/password login. Requires `AUTH_JWT_SECRET` (min 32 chars; generate with
+  `openssl rand -base64 48`). Optional: `AUTH_TOKEN_TTL_HOURS` (default 720 = 30 days),
+  `AUTH_REQUIRE_EMAIL_VERIFICATION` (default `false`). No Firebase setup needed.
+- **`firebase`** (default) — Google/Apple/Email sign-in via Firebase. Provide credentials with one of
+  the two options below. Optionally set the public `AUTH_FIREBASE_WEB_API_KEY` so `GET /auth/config`
+  hands the client your web config.
+
+Clients call `GET /auth/config` (public) to discover the mode before showing a login screen.
 
 **Firebase – option A (file):**
 
@@ -69,6 +85,8 @@ Edit `.env`:
 - In `.env` set: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` (private key with `\n` for newlines).
 
 Other optional vars: `PORT` (default 3000), `REDIS_URL`, `SWAGGER_USERNAME`/`SWAGGER_PASSWORD`, `ALLOWED_ORIGINS`, `FIRST_RUN`. See `env.example`.
+
+> In production use `npm run db:deploy` (not `db:migrate`) to apply migrations, or set `FIRST_RUN=true` on the first boot to run them automatically, then remove it.
 
 ### 3. Run migrations
 
@@ -92,6 +110,17 @@ npm run start
 ```
 
 API at `http://localhost:3000`. Swagger docs (when enabled): `http://localhost:3000/docs`.
+
+### 5. Verify
+
+```bash
+curl http://localhost:3000/health
+```
+
+Returns `{ status, timestamp, uptime, apiVersion, minClientVersion }`. `apiVersion` is the self-host
+contract: clients compare it against the official contract to detect a backend that has fallen behind.
+If your instance reports an older `apiVersion` than the app expects, pull the latest code and redeploy
+so the schema and endpoints stay in sync.
 
 ## Scripts
 

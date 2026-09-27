@@ -1,5 +1,4 @@
 import { prisma } from '../../shared/db/prisma.js';
-import { isProduction } from '../../shared/config/env.js';
 import { NotFoundError, BadRequestError } from '../../shared/errors/index.js';
 
 /**
@@ -11,12 +10,12 @@ export async function processReferralCode(
   newUserId: string
 ): Promise<string | null> {
   if (!referralCode || !referralCode.trim()) {
-    if (!isProduction) console.log('[Referral] Empty referral code provided');
+    console.log(`[Referral] Empty referral code provided for user ${newUserId}`);
     return null;
   }
 
   const code = referralCode.trim().toUpperCase();
-  if (!isProduction) console.log('[Referral] Processing referral code');
+  console.log(`[Referral] Processing referral code: ${code} for user: ${newUserId}`);
 
   // Find user by referral code
   const referrer = await prisma.user.findFirst({
@@ -29,13 +28,16 @@ export async function processReferralCode(
   });
 
   if (!referrer) {
-    if (!isProduction) console.log('[Referral] Referral code not found');
+    // Invalid referral code - silently ignore (don't fail signup)
+    console.log(`[Referral] Referral code ${code} not found in database`);
     return null;
   }
 
+  console.log(`[Referral] Found referrer: ${referrer.id} for code: ${code}`);
+
   // Don't allow self-referral
   if (referrer.id === newUserId) {
-    if (!isProduction) console.log('[Referral] Self-referral detected, skipping');
+    console.log(`[Referral] Self-referral detected for user ${newUserId}, skipping`);
     return null;
   }
 
@@ -47,9 +49,12 @@ export async function processReferralCode(
   });
 
   if (existingReferral) {
+    // Already referred - return existing referrer ID
+    console.log(`[Referral] User ${newUserId} already has referral record from ${existingReferral.referrerId}`);
     return existingReferral.referrerId;
   }
 
+  // Create referral record
   try {
     const referral = await prisma.referral.create({
       data: {
@@ -58,10 +63,10 @@ export async function processReferralCode(
         referralCode: code,
       },
     });
-    if (!isProduction) console.log('[Referral] Referral record created:', referral.id);
+    console.log(`[Referral] Successfully created referral record: ${referral.id} (${referrer.id} -> ${newUserId})`);
     return referrer.id;
   } catch (error) {
-    if (!isProduction) console.error('[Referral] Error creating referral record:', error);
+    console.error(`[Referral] Error creating referral record:`, error);
     throw error;
   }
 }

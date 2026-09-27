@@ -1,7 +1,7 @@
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/db/prisma.js';
 import { NotFoundError, BadRequestError } from '../../shared/errors/index.js';
-import { CategoryName } from '../../shared/enums/index.js';
+import { CategoryName, AccountType } from '../../shared/enums/index.js';
 import { applyTransfer } from '../../shared/services/balance.service.js';
 import type {
   CreateAccountInput,
@@ -73,6 +73,12 @@ export async function createAccount(input: CreateAccountInput) {
       ...(input.creditLimit && { creditLimit: new Prisma.Decimal(input.creditLimit) }),
       ...(input.dueDay && { dueDay: input.dueDay }),
       ...(input.closingDay && { closingDay: input.closingDay }),
+      // Default to 10 days when creating a credit card without an explicit offset
+      ...(input.bestDayOffset !== undefined
+        ? { bestDayOffset: input.bestDayOffset }
+        : input.type === 'CREDIT'
+          ? { bestDayOffset: 10 }
+          : {}),
       ...(input.linkedAccountId && { linkedAccountId: input.linkedAccountId }),
     },
   });
@@ -509,6 +515,7 @@ export async function updateAccount(accountId: string, householdId: string, inpu
     }),
     ...(input.dueDay !== undefined && { dueDay: input.dueDay }),
     ...(input.closingDay !== undefined && { closingDay: input.closingDay }),
+    ...(input.bestDayOffset !== undefined && { bestDayOffset: input.bestDayOffset }),
     ...(input.linkedAccountId !== undefined && { linkedAccountId: input.linkedAccountId }),
   };
 
@@ -517,13 +524,45 @@ export async function updateAccount(accountId: string, householdId: string, inpu
     updateData.creditLimit = null;
     updateData.dueDay = null;
     updateData.closingDay = null;
+    updateData.bestDayOffset = null;
     updateData.linkedAccountId = null;
+    updateData.totalLimit = null;
   }
 
   const account = await prisma.account.update({
     where: { id: accountId },
     data: updateData,
   });
+
+  // REGRA: totalLimit = creditLimit + currently allocated balance (only if credit card).
+  // Recalculate after every edit so the value never drifts from the invariant.
+  if (account.type === AccountType.CREDIT) {
+    const allocatedFromBankAccounts = await prisma.account.aggregate({
+      where: {
+        householdId: account.householdId,
+        type: { not: AccountType.CREDIT },
+        isActive: true,
+      },
+      _sum: { allocatedBalance: true },
+    });
+    const allocatedTotal = allocatedFromBankAccounts._sum.allocatedBalance?.toNumber() ?? 0;
+    const creditLimitValue = account.creditLimit?.toNumber() ?? 0;
+    const correctTotalLimit = creditLimitValue + allocatedTotal;
+    if (
+      account.totalLimit === null ||
+      Math.abs(account.totalLimit.toNumber() - correctTotalLimit) > 0.001
+    ) {
+      const updated = await prisma.account.update({
+        where: { id: accountId },
+        data: { totalLimit: new Prisma.Decimal(correctTotalLimit) },
+      });
+      return {
+        ...updated,
+        balance: updated.balance.toNumber(),
+        creditLimit: updated.creditLimit ? updated.creditLimit.toNumber() : null,
+      };
+    }
+  }
 
   // Convert Prisma.Decimal to number for JSON serialization
   return {
@@ -536,11 +575,14 @@ export async function updateAccount(accountId: string, householdId: string, inpu
 /**
  * Delete account permanently from database
  * This is a hard delete - the account record is removed from the database
- * Transactions are preserved as they belong to the household, not the account
- * Transactions will remain in the user's account and will affect the balance calculation
- * of the next bank account the user creates
+ *
+ * By default transactions are preserved (the schema sets their account FKs to NULL
+ * via onDelete: SetNull), which leaves them showing up unlinked in the Transactions
+ * list. When `deleteTransactions` is true we explicitly delete every transaction that
+ * references this account (via accountId, fromAccountId or toAccountId) inside the same
+ * DB transaction, so no orphaned records are left behind.
  */
-export async function deleteAccount(accountId: string) {
+export async function deleteAccount(accountId: string, deleteTransactions = false) {
   const account = await prisma.account.findUnique({
     where: { id: accountId },
   });
@@ -553,17 +595,39 @@ export async function deleteAccount(accountId: string) {
   const deletedAccountId = account.id;
   const householdId = account.householdId;
 
-  // Hard delete - permanently remove the account from database
-  // The account record is completely removed from the database
-  // Transactions remain in the database as they belong to the household, not the account
-  // When the account is deleted, accountId in transactions is set to NULL (onDelete: SetNull in schema)
-  await prisma.account.delete({
-    where: { id: accountId },
-  });
+  let deletedTransactionsCount = 0;
 
-  return { 
+  if (deleteTransactions) {
+    // Delete linked transactions and the account atomically, so we never end up
+    // with the account gone but its transactions half-deleted (or vice-versa).
+    const [{ count }] = await prisma.$transaction([
+      prisma.transaction.deleteMany({
+        where: {
+          householdId,
+          OR: [
+            { accountId },
+            { fromAccountId: accountId },
+            { toAccountId: accountId },
+          ],
+        },
+      }),
+      prisma.account.delete({
+        where: { id: accountId },
+      }),
+    ]);
+    deletedTransactionsCount = count;
+  } else {
+    // Hard delete the account only; linked transactions keep their rows with the
+    // account FKs set to NULL (onDelete: SetNull in schema).
+    await prisma.account.delete({
+      where: { id: accountId },
+    });
+  }
+
+  return {
     id: deletedAccountId,
     householdId: householdId,
+    deletedTransactions: deletedTransactionsCount,
   };
 }
 

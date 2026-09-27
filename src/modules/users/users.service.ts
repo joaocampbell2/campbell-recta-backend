@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/db/prisma.js';
 import { NotFoundError } from '../../shared/errors/index.js';
@@ -142,40 +141,29 @@ export async function updateUserPreferences(
 export async function getOrCreateReferralCode(userId: string): Promise<string> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { referralCode: true },
+    select: { referralCode: true, firebaseUid: true },
   });
 
   if (!user) {
     throw new NotFoundError('User');
   }
 
+  // If referral code exists, return it
   if (user.referralCode) {
     return user.referralCode;
   }
 
-  // Generate cryptographically random 8-char code (hex uppercase), retry on collision
-  const maxAttempts = 5;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
-    const existing = await prisma.user.findFirst({
-      where: { referralCode },
-      select: { id: true },
-    });
-    if (!existing) {
-      await prisma.user.update({
-        where: { id: userId },
-        data: { referralCode },
-      });
-      return referralCode;
-    }
-  }
-  // Fallback only if collisions (very unlikely): use timestamp-based suffix
-  const fallback = `R${Date.now().toString(36).toUpperCase().slice(-7)}`;
+  // Generate referral code from Firebase UID
+  const cleanId = user.firebaseUid.replace(/-/g, '');
+  const referralCode = cleanId.slice(0, 8).toUpperCase();
+
+  // Save and return
   await prisma.user.update({
     where: { id: userId },
-    data: { referralCode: fallback },
+    data: { referralCode },
   });
-  return fallback;
+
+  return referralCode;
 }
 
 /**

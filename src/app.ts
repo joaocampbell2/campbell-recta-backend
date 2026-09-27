@@ -82,11 +82,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // PLUGINS
   // ============================================================================
 
-  // Swagger/OpenAPI: in production only enable when credentials are set (avoid exposing full API)
-  const swaggerEnabled = !isProduction || !!(env.SWAGGER_USERNAME && env.SWAGGER_PASSWORD);
-
   // Swagger/OpenAPI Documentation
-  if (swaggerEnabled) {
   await app.register(swagger, {
     openapi: {
       openapi: '3.0.0',
@@ -174,10 +170,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
     transformSpecificationClone: true,
   });
-  }
 
   // CORS
-  // Allow localhost (any port) and exact recta.app domains
+  // Allow localhost (any port) and any domain containing "recta.app"
   await app.register(cors, {
     origin: (origin, callback) => {
       // Allow requests with no origin (like mobile apps or curl requests)
@@ -267,8 +262,8 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.setErrorHandler(errorHandler);
 
-  // Protect Swagger endpoints (UI and JSON spec) with basic auth when enabled in production
-  if (swaggerEnabled && env.SWAGGER_USERNAME && env.SWAGGER_PASSWORD) {
+  // Protect Swagger endpoints (UI and JSON spec) with basic auth if configured
+  if (env.SWAGGER_USERNAME && env.SWAGGER_PASSWORD) {
     app.addHook('onRequest', async (request, reply) => {
       // Protect all /docs/* routes
       if (request.url.startsWith('/docs')) {
@@ -296,7 +291,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     return {
       name: 'Recta API',
       version: '1.0.0',
-      ...(swaggerEnabled && { documentation: '/docs', openApiSpec: '/docs/json' }),
+      documentation: '/docs',
+      openApiSpec: '/docs/json',
     };
   });
 

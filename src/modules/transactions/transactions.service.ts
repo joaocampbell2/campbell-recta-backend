@@ -2222,6 +2222,27 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
       },
     });
 
+    // Structured log so the payment's technical identifier can be compared against
+    // the frontend invoice filter (CreditCards.tsx builds the same
+    // `invoice_pay:${cardId}:${year}-${zeroBasedMonth}` string). If the frontend
+    // does not surface this payment, compare `technicalIdentifier` and `paymentDate`
+    // below with the month bucket being viewed: a payment is stored with today's date,
+    // so paying an invoice in a later month lands it outside that month's bucket.
+    console.info('[payCreditCardInvoice] payment recorded', JSON.stringify({
+      householdId,
+      creditCardAccountId: accountId,
+      sourceAccountId,
+      requestedMonth: month,
+      monthKey,
+      technicalIdentifier,
+      paymentTransactionId: paymentTransaction.id,
+      paymentDate: paymentTransaction.date.toISOString(),
+      invoicePeriodStart: invoiceMonthStart.toISOString(),
+      invoicePeriodEnd: invoiceMonthEnd.toISOString(),
+      amountToPay,
+      invoiceRemainingBeforePayment: invoiceRemaining,
+    }));
+
     // 6. Update source account balance (decrease available balance)
     await tx.account.update({
       where: { id: sourceAccountId },

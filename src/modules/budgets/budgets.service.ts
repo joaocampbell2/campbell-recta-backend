@@ -2,7 +2,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/db/prisma.js';
 import { NotFoundError, BadRequestError } from '../../shared/errors/index.js';
 import { parseMonthFilter } from '../../shared/utils/pagination.js';
-import { CategoryType, getCategoriesByType, getCategoryColor } from '../../shared/enums/index.js';
+import { CategoryType, GENERAL_BUDGET_CATEGORY, getCategoriesByType, getCategoryColor } from '../../shared/enums/index.js';
 import { isCustomCategoryName, toCustomCategoryId } from '../../shared/utils/categoryHelpers.js';
 import type {
   CreateBudgetInput,
@@ -24,7 +24,9 @@ export async function createBudget(input: CreateBudgetInput) {
   const { categoryName, monthlyLimit, month, type } = input;
 
   // Verify category type matches budget type
-  if (isCustomCategoryName(categoryName)) {
+  if (categoryName === GENERAL_BUDGET_CATEGORY) {
+    // General pseudo-category is valid for both INCOME and EXPENSE budgets.
+  } else if (isCustomCategoryName(categoryName)) {
     const customId = toCustomCategoryId(categoryName)!;
     const cat = await prisma.category.findFirst({ where: { id: customId, householdId } });
     if (!cat || cat.type !== type) {
@@ -42,12 +44,15 @@ export async function createBudget(input: CreateBudgetInput) {
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
 
-  // Check if budget already exists for this category and month
+  // Check if budget already exists for this category, month and type.
+  // Including type lets a household keep both a general INCOME and a general
+  // EXPENSE budget in the same month (GENERAL is shared across both types).
   const existingBudget = await prisma.budget.findFirst({
     where: {
       householdId,
       categoryName,
       month: monthStart,
+      type,
     },
   });
 
@@ -203,20 +208,38 @@ export async function getBudgetSummary(query: BudgetSummaryQuery) {
   // Get spending for each budget category
   const budgetSummaries = await Promise.all(
     budgets.map(async (budget: { categoryName: string; monthlyLimit: Prisma.Decimal; month: Date; type: string; id: string; householdId: string; createdAt: Date; updatedAt: Date }) => {
-      const where: Prisma.TransactionWhereInput = {
-        householdId,
-        categoryName: budget.categoryName,
-        ...(dateFilter && { date: dateFilter }),
-      };
+      let spending: number;
 
-      const transactions = await prisma.transaction.findMany({
-        where,
-        select: { amount: true },
-      });
+      if (budget.categoryName === GENERAL_BUDGET_CATEGORY) {
+        // General pseudo-budget represents the total spending/income of the period.
+        const totalWhere: Prisma.TransactionWhereInput = {
+          householdId,
+          type: budget.type as CategoryType,
+          ...(dateFilter && { date: dateFilter }),
+        };
+        const totalTransactions = await prisma.transaction.findMany({
+          where: totalWhere,
+          select: { amount: true },
+        });
+        spending = totalTransactions.reduce((sum: number, t: { amount: Prisma.Decimal }) => {
+          return sum + Math.abs(t.amount.toNumber());
+        }, 0);
+      } else {
+        const where: Prisma.TransactionWhereInput = {
+          householdId,
+          categoryName: budget.categoryName,
+          ...(dateFilter && { date: dateFilter }),
+        };
 
-      const spending = transactions.reduce((sum: number, t: { amount: Prisma.Decimal }) => {
-        return sum + Math.abs(t.amount.toNumber());
-      }, 0);
+        const transactions = await prisma.transaction.findMany({
+          where,
+          select: { amount: true },
+        });
+
+        spending = transactions.reduce((sum: number, t: { amount: Prisma.Decimal }) => {
+          return sum + Math.abs(t.amount.toNumber());
+        }, 0);
+      }
 
       const limit = budget.monthlyLimit.toNumber();
       const remaining = limit - spending;

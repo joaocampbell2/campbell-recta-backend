@@ -4,7 +4,6 @@ import {
   getUserByFirebaseUid,
   getUserHouseholds,
 } from '../../shared/middleware/authorization.middleware.js';
-import { isProduction } from '../../shared/config/env.js';
 import { getOrCreatePersonalHousehold } from '../households/households.service.js';
 import { processReferralCode } from '../users/referrals.service.js';
 import { prisma } from '../../shared/db/prisma.js';
@@ -192,17 +191,22 @@ export async function authRoutes(app: FastifyInstance) {
         
         if (hasNoReferralRecord && wasCreatedRecently) {
           try {
-            if (!isProduction) {
-              console.log('[Referral] Processing referral for new user');
-            }
+            console.log(`[Referral] Processing referral code ${referralCode} for user ${user.id}`);
             const referrerId = await processReferralCode(referralCode, user.id);
-            if (referrerId && !isProduction) {
-              console.log('[Referral] Referral processed successfully');
+            if (referrerId) {
+              console.log(`[Referral] Successfully processed referral: ${referrerId} -> ${user.id}`);
+            } else {
+              console.log(`[Referral] Referral code ${referralCode} is invalid or already processed`);
             }
           } catch (error) {
-            if (!isProduction) {
-              console.error('[Referral] Error processing referral code:', error);
-            }
+            // Log error but don't fail signup - referral is not critical
+            console.error('[Referral] Error processing referral code:', error);
+          }
+        } else {
+          if (existingReferral) {
+            console.log(`[Referral] User ${user.id} already has a referral record (referrer: ${existingReferral.referrerId}), skipping`);
+          } else if (!wasCreatedRecently) {
+            console.log(`[Referral] User ${user.id} was created more than 5 minutes ago, skipping referral processing`);
           }
         }
       }

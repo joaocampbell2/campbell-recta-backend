@@ -104,6 +104,14 @@ export const CATEGORY_NAME_DISPLAY: Record<CategoryName, string> = {
 };
 
 /**
+ * Special pseudo-category name used by budgets to represent total
+ * spending/income for the month. Not used by transactions.
+ * Stored as a plain string in the database (VARCHAR) so it does not
+ * need to live in the CategoryName enum.
+ */
+export const GENERAL_BUDGET_CATEGORY = 'GENERAL';
+
+/**
  * Get all categories by type
  */
 export function getCategoriesByType(type: CategoryType): CategoryName[] {

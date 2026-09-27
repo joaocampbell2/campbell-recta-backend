@@ -1,6 +1,6 @@
 import { prisma } from '../../shared/db/prisma.js';
 import { parseMonthFilter } from '../../shared/utils/pagination.js';
-import { AccountType, TransactionType, CategoryType, getCategoriesByType, getCategoryColor, CATEGORY_NAME_DISPLAY } from '../../shared/enums/index.js';
+import { AccountType, TransactionType, CategoryType, GENERAL_BUDGET_CATEGORY, getCategoriesByType, getCategoryColor, CATEGORY_NAME_DISPLAY } from '../../shared/enums/index.js';
 import { isCustomCategoryName, toCustomCategoryName } from '../../shared/utils/categoryHelpers.js';
 import type {
   DashboardOverviewQuery,
@@ -30,9 +30,14 @@ export async function getDashboardOverview(query: DashboardOverviewQuery): Promi
     : `${year}-${String(monthNum - 1).padStart(2, '0')}`;
   const { start: prevMonthStart, end: prevMonthEnd } = parseMonthFilter(prevMonth);
 
-  // Get credit card IDs to exclude
+  // Get credit card IDs to exclude. This set is only ever used to EXCLUDE credit
+  // card transactions from bank income/expense figures, so it must include inactive
+  // cards too: otherwise a deactivated card's transactions would be dropped by
+  // calculateSummary (which also checks account.type === CREDIT) but still counted by
+  // getMonthlyAggregates/heatmap (which only filter by accountId), making the widgets
+  // disagree with each other.
   const creditCardAccounts = await prisma.account.findMany({
-    where: { householdId, type: AccountType.CREDIT, isActive: true },
+    where: { householdId, type: AccountType.CREDIT },
     select: { id: true },
   });
   const creditCardIds = new Set(creditCardAccounts.map(a => a.id));
@@ -227,6 +232,7 @@ function calculateForecast(
     amount: { toNumber: () => number } | number;
     accountId: string | null;
     account: { type: string } | null;
+    frequency?: string;
   }>,
   creditCardIds: Set<string>
 ): DashboardForecast {
@@ -240,11 +246,15 @@ function calculateForecast(
     if (rt.account && rt.account.type === AccountType.CREDIT) continue;
 
     const amount = typeof rt.amount === 'number' ? rt.amount : rt.amount.toNumber();
+    // For periodic transactions (e.g. BIWEEKLY salary), the per-occurrence amount
+    // needs to be multiplied by the number of occurrences that fall in a month
+    // so that the monthly forecast reflects the real impact (e.g. quinzenal 8,000 -> 16,000).
+    const monthlyMultiplier = getMonthlyMultiplier(rt.frequency);
 
     if (rt.type === TransactionType.INCOME) {
-      predictedIncome += amount;
+      predictedIncome += amount * monthlyMultiplier;
     } else if (rt.type === TransactionType.EXPENSE) {
-      predictedExpense += Math.abs(amount);
+      predictedExpense += Math.abs(amount) * monthlyMultiplier;
     }
   }
 
@@ -253,6 +263,36 @@ function calculateForecast(
     predictedExpense,
     predictedBalance: predictedIncome - predictedExpense,
   };
+}
+
+/**
+ * Return how many occurrences of a recurring transaction fall in a typical month
+ * based on its frequency. Used to scale periodic amounts for monthly forecasts.
+ *
+ * Note: BIWEEKLY is labeled "Quinzenal" in pt-BR and other locales where it is
+ * commonly used as "twice per month" (e.g. salaries paid on the 15th and 30th),
+ * so we treat it as exactly 2 occurrences per month for forecasting purposes.
+ * For other frequencies we use a yearly average (52/12, 26/12) so the projection
+ * is statistically representative over a 12-month window.
+ */
+function getMonthlyMultiplier(frequency?: string): number {
+  switch (frequency) {
+    case 'DAILY':
+      // ~30 days per month
+      return 30;
+    case 'WEEKLY':
+      // ~4.33 weeks per month
+      return 52 / 12;
+    case 'BIWEEKLY':
+      // Treated as twice per month to match user expectation of "quinzenal".
+      return 2;
+    case 'MONTHLY':
+      return 1;
+    case 'YEARLY':
+      return 1 / 12;
+    default:
+      return 1;
+  }
 }
 
 /**
@@ -488,7 +528,7 @@ function calculateBudgetVsRealized(
     const isExpenseBudget = budget.type === CategoryType.EXPENSE || budget.type === 'EXPENSE';
     let spent: number;
 
-    if (budget.categoryName === 'Geral') {
+    if (budget.categoryName === 'Geral' || budget.categoryName === GENERAL_BUDGET_CATEGORY) {
       // General budget - use total
       spent = isExpenseBudget ? summary.totalExpense : summary.totalIncome;
     } else {

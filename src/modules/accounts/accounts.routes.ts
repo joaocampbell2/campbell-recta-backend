@@ -322,7 +322,7 @@ export async function accountRoutes(app: FastifyInstance) {
    * DELETE /accounts/:accountId
    * Delete account permanently from database (EDITOR+)
    */
-  app.delete<{ Params: { accountId: string } }>(
+  app.delete<{ Params: { accountId: string }; Querystring: { deleteTransactions?: boolean } }>(
     '/:accountId',
     {
       schema: {
@@ -334,6 +334,16 @@ export async function accountRoutes(app: FastifyInstance) {
           required: ['accountId'],
           properties: {
             accountId: { type: 'string', format: 'uuid' },
+          },
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            deleteTransactions: {
+              type: 'boolean',
+              default: false,
+              description: 'Also permanently delete every transaction linked to this account',
+            },
           },
         },
         response: {
@@ -349,12 +359,13 @@ export async function accountRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { accountId } = accountIdParamSchema.parse(request.params);
+      const deleteTransactions = request.query.deleteTransactions === true;
 
       // Get account to verify household access
       const existingAccount = await accountsService.getAccount(accountId);
       await requireEditor(request, existingAccount.householdId);
 
-      const result = await accountsService.deleteAccount(accountId);
+      const result = await accountsService.deleteAccount(accountId, deleteTransactions);
 
       return reply.send({
         success: true,

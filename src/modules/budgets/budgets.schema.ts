@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CategoryType } from '../../shared/enums/index.js';
+import { CategoryType, GENERAL_BUDGET_CATEGORY } from '../../shared/enums/index.js';
 import { localDateSchema } from '../../shared/utils/dateSchema.js';
 import { categoryNameSchema } from '../categories/categories.schema.js';
 
@@ -9,11 +9,22 @@ import { categoryNameSchema } from '../categories/categories.schema.js';
 export const categoryTypeEnum = z.nativeEnum(CategoryType);
 
 /**
+ * Budget categoryName: a system enum value, a "CUSTOM:<uuid>" id, OR the
+ * budget-only "GENERAL" pseudo-category (total income/expense for the month).
+ * GENERAL is valid for budgets only, so it lives here rather than in the
+ * shared categoryNameSchema (which also governs transactions).
+ */
+export const budgetCategoryNameSchema = z.union([
+  z.literal(GENERAL_BUDGET_CATEGORY),
+  categoryNameSchema,
+]);
+
+/**
  * Create budget request
  */
 export const createBudgetSchema = z.object({
   householdId: z.string().uuid().optional(), // Optional - will create personal household if not provided
-  categoryName: categoryNameSchema,
+  categoryName: budgetCategoryNameSchema,
   monthlyLimit: z.coerce.number().positive('Monthly limit must be positive'),
   month: localDateSchema,
   type: categoryTypeEnum,
