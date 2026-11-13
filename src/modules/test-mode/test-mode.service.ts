@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/db/prisma.js';
 import { BadRequestError, NotFoundError } from '../../shared/errors/index.js';
@@ -203,64 +204,75 @@ export async function startTestMode(
 
       // 1. Categories
       const categoryMap = new Map<string, string>();
-      for (const cat of categories) {
-        const created = await tx.category.create({
-          data: {
-            householdId: sandboxId,
-            name: cat.name,
-            type: cat.type,
-            icon: cat.icon,
-            color: cat.color,
-          },
+      if (categories.length > 0) {
+        await tx.category.createMany({
+          data: categories.map((cat) => {
+            const id = randomUUID();
+            categoryMap.set(cat.id, id);
+            return {
+              id,
+              householdId: sandboxId,
+              name: cat.name,
+              type: cat.type,
+              icon: cat.icon,
+              color: cat.color,
+            };
+          }),
         });
-        categoryMap.set(cat.id, created.id);
       }
 
       // 2. Accounts (create first, then link linkedAccountId)
       const accountMap = new Map<string, string>();
-      for (const acc of accounts) {
-        const created = await tx.account.create({
-          data: {
-            householdId: sandboxId,
-            name: acc.name,
-            type: acc.type,
-            balance: acc.balance,
-            currency: acc.currency,
-            isActive: acc.isActive,
-            status: acc.status,
-            color: acc.color,
-            icon: acc.icon,
-            totalBalance: acc.totalBalance,
-            availableBalance: acc.availableBalance,
-            allocatedBalance: acc.allocatedBalance,
-            creditLimit: acc.creditLimit,
-            totalLimit: acc.totalLimit,
-            availableLimit: acc.availableLimit,
-            dueDay: acc.dueDay,
-            closingDay: acc.closingDay,
-            bestDayOffset: acc.bestDayOffset,
-          },
+      if (accounts.length > 0) {
+        await tx.account.createMany({
+          data: accounts.map((acc) => {
+            const id = randomUUID();
+            accountMap.set(acc.id, id);
+            return {
+              id,
+              householdId: sandboxId,
+              name: acc.name,
+              type: acc.type,
+              balance: acc.balance,
+              currency: acc.currency,
+              isActive: acc.isActive,
+              status: acc.status,
+              color: acc.color,
+              icon: acc.icon,
+              totalBalance: acc.totalBalance,
+              availableBalance: acc.availableBalance,
+              allocatedBalance: acc.allocatedBalance,
+              creditLimit: acc.creditLimit,
+              totalLimit: acc.totalLimit,
+              availableLimit: acc.availableLimit,
+              dueDay: acc.dueDay,
+              closingDay: acc.closingDay,
+              bestDayOffset: acc.bestDayOffset,
+            };
+          }),
         });
-        accountMap.set(acc.id, created.id);
-      }
 
-      for (const acc of accounts) {
-        if (acc.linkedAccountId && accountMap.has(acc.linkedAccountId)) {
-          await tx.account.update({
-            where: { id: accountMap.get(acc.id)! },
-            data: { linkedAccountId: accountMap.get(acc.linkedAccountId)! },
-          });
+        for (const acc of accounts) {
+          if (acc.linkedAccountId && accountMap.has(acc.linkedAccountId)) {
+            await tx.account.update({
+              where: { id: accountMap.get(acc.id)! },
+              data: { linkedAccountId: accountMap.get(acc.linkedAccountId)! },
+            });
+          }
         }
       }
 
       // 3. Recurring transactions
       const recurringMap = new Map<string, string>();
-      for (const rec of recurringTransactions) {
+      const recurringData = recurringTransactions.flatMap((rec) => {
         const mappedAccountId = accountMap.get(rec.accountId);
-        if (!mappedAccountId) continue;
+        if (!mappedAccountId) return [];
 
-        const created = await tx.recurringTransaction.create({
-          data: {
+        const id = randomUUID();
+        recurringMap.set(rec.id, id);
+        return [
+          {
+            id,
             householdId: sandboxId,
             accountId: mappedAccountId,
             categoryName:
@@ -274,28 +286,30 @@ export async function startTestMode(
             lastRunDate: rec.lastRunDate,
             isActive: rec.isActive,
           },
-        });
-        recurringMap.set(rec.id, created.id);
+        ];
+      });
+      if (recurringData.length > 0) {
+        await tx.recurringTransaction.createMany({ data: recurringData });
       }
 
       // 4. Savings goals
-      for (const goal of savingsGoals) {
-        await tx.savingsGoal.create({
-          data: {
+      if (savingsGoals.length > 0) {
+        await tx.savingsGoal.createMany({
+          data: savingsGoals.map((goal) => ({
             householdId: sandboxId,
             accountId: goal.accountId ? accountMap.get(goal.accountId) ?? null : null,
             name: goal.name,
             targetAmount: goal.targetAmount,
             currentAmount: goal.currentAmount,
             targetDate: goal.targetDate,
-          },
+          })),
         });
       }
 
       // 5. Budgets
-      for (const budget of budgets) {
-        await tx.budget.create({
-          data: {
+      if (budgets.length > 0) {
+        await tx.budget.createMany({
+          data: budgets.map((budget) => ({
             householdId: sandboxId,
             categoryName:
               remapCategoryName(budget.categoryName, categoryMap) ??
@@ -303,98 +317,111 @@ export async function startTestMode(
             monthlyLimit: budget.monthlyLimit,
             month: budget.month,
             type: budget.type,
-          },
+          })),
         });
       }
 
       // 6. Transactions
       const txMap = new Map<string, string>();
-      for (const item of transactions) {
-        const created = await tx.transaction.create({
-          data: {
-            householdId: sandboxId,
-            type: item.type,
-            accountId: item.accountId ? accountMap.get(item.accountId) ?? null : null,
-            categoryName: remapCategoryName(item.categoryName, categoryMap),
-            amount: item.amount,
-            description: item.description,
-            date: item.date,
-            notes: item.notes,
-            paid: item.paid,
-            fromAccountId: item.fromAccountId
-              ? accountMap.get(item.fromAccountId) ?? null
-              : null,
-            toAccountId: item.toAccountId
-              ? accountMap.get(item.toAccountId) ?? null
-              : null,
-            relatedEntityId: item.relatedEntityId
-              ? accountMap.get(item.relatedEntityId) ?? null
-              : null,
-            recurringTransactionId: item.recurringTransactionId
-              ? recurringMap.get(item.recurringTransactionId) ?? null
-              : null,
-            installmentId: item.installmentId,
-            installmentNumber: item.installmentNumber,
-            totalInstallments: item.totalInstallments,
-            attachmentUrl: item.attachmentUrl,
-            isSplit: false,
-          },
+      if (transactions.length > 0) {
+        await tx.transaction.createMany({
+          data: transactions.map((item) => {
+            const id = randomUUID();
+            txMap.set(item.id, id);
+            return {
+              id,
+              householdId: sandboxId,
+              type: item.type,
+              accountId: item.accountId ? accountMap.get(item.accountId) ?? null : null,
+              categoryName: remapCategoryName(item.categoryName, categoryMap),
+              amount: item.amount,
+              description: item.description,
+              date: item.date,
+              notes: item.notes,
+              paid: item.paid,
+              fromAccountId: item.fromAccountId
+                ? accountMap.get(item.fromAccountId) ?? null
+                : null,
+              toAccountId: item.toAccountId
+                ? accountMap.get(item.toAccountId) ?? null
+                : null,
+              relatedEntityId: item.relatedEntityId
+                ? accountMap.get(item.relatedEntityId) ?? null
+                : null,
+              recurringTransactionId: item.recurringTransactionId
+                ? recurringMap.get(item.recurringTransactionId) ?? null
+                : null,
+              installmentId: item.installmentId,
+              installmentNumber: item.installmentNumber,
+              totalInstallments: item.totalInstallments,
+              attachmentUrl: item.attachmentUrl,
+              isSplit: false,
+            };
+          }),
         });
-        txMap.set(item.id, created.id);
       }
 
       // 7. Split friends
       const friendMap = new Map<string, string>();
-      for (const friend of splitFriends) {
-        const created = await tx.splitFriend.create({
-          data: {
-            householdId: sandboxId,
-            name: friend.name,
-            emailOrPix: friend.emailOrPix,
-            avatarColor: friend.avatarColor,
-            avatarUrl: friend.avatarUrl,
-            archived: friend.archived,
-          },
+      if (splitFriends.length > 0) {
+        await tx.splitFriend.createMany({
+          data: splitFriends.map((friend) => {
+            const id = randomUUID();
+            friendMap.set(friend.id, id);
+            return {
+              id,
+              householdId: sandboxId,
+              name: friend.name,
+              emailOrPix: friend.emailOrPix,
+              avatarColor: friend.avatarColor,
+              avatarUrl: friend.avatarUrl,
+              archived: friend.archived,
+            };
+          }),
         });
-        friendMap.set(friend.id, created.id);
       }
 
       // 8. Split groups & members
       const groupMap = new Map<string, string>();
-      for (const group of splitGroups) {
-        const created = await tx.splitGroup.create({
-          data: {
-            householdId: sandboxId,
-            name: group.name,
-            category: group.category,
-            avatarUrl: group.avatarUrl,
-            archived: group.archived,
-          },
+      if (splitGroups.length > 0) {
+        await tx.splitGroup.createMany({
+          data: splitGroups.map((group) => {
+            const id = randomUUID();
+            groupMap.set(group.id, id);
+            return {
+              id,
+              householdId: sandboxId,
+              name: group.name,
+              category: group.category,
+              avatarUrl: group.avatarUrl,
+              archived: group.archived,
+            };
+          }),
         });
-        groupMap.set(group.id, created.id);
       }
 
-      for (const member of splitGroupMembers) {
+      const groupMemberData = splitGroupMembers.flatMap((member) => {
         const mappedGroupId = groupMap.get(member.groupId);
         const mappedFriendId = friendMap.get(member.friendId);
-        if (!mappedGroupId || !mappedFriendId) continue;
+        if (!mappedGroupId || !mappedFriendId) return [];
 
-        await tx.splitGroupMember.create({
-          data: {
-            groupId: mappedGroupId,
-            friendId: mappedFriendId,
-          },
-        });
+        return [{ groupId: mappedGroupId, friendId: mappedFriendId }];
+      });
+      if (groupMemberData.length > 0) {
+        await tx.splitGroupMember.createMany({ data: groupMemberData });
       }
 
       // 9. Split debts & installments
       const debtMap = new Map<string, string>();
-      for (const debt of splitDebts) {
+      const splitDebtData = splitDebts.flatMap((debt) => {
         const mappedFriendId = friendMap.get(debt.friendId);
-        if (!mappedFriendId) continue;
+        if (!mappedFriendId) return [];
 
-        const created = await tx.splitDebt.create({
-          data: {
+        const id = randomUUID();
+        debtMap.set(debt.id, id);
+        return [
+          {
+            id,
             householdId: sandboxId,
             description: debt.description,
             category: remapCategoryName(debt.category, categoryMap),
@@ -416,16 +443,18 @@ export async function startTestMode(
               : null,
             createdAt: debt.createdAt,
           },
-        });
-        debtMap.set(debt.id, created.id);
+        ];
+      });
+      if (splitDebtData.length > 0) {
+        await tx.splitDebt.createMany({ data: splitDebtData });
       }
 
-      for (const inst of splitInstallments) {
+      const installmentData = splitInstallments.flatMap((inst) => {
         const mappedDebtId = debtMap.get(inst.debtId);
-        if (!mappedDebtId) continue;
+        if (!mappedDebtId) return [];
 
-        await tx.splitInstallment.create({
-          data: {
+        return [
+          {
             debtId: mappedDebtId,
             installmentNumber: inst.installmentNumber,
             totalInstallments: inst.totalInstallments,
@@ -438,7 +467,10 @@ export async function startTestMode(
               ? txMap.get(inst.legacyReimbursementTxId) ?? inst.legacyReimbursementTxId
               : null,
           },
-        });
+        ];
+      });
+      if (installmentData.length > 0) {
+        await tx.splitInstallment.createMany({ data: installmentData });
       }
 
       return createdSandbox;
