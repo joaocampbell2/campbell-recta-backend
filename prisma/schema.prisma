@@ -73,6 +73,9 @@ model Household {
   budgets               Budget[]
   savingsGoals          SavingsGoal[]
   recurringTransactions RecurringTransaction[]
+  splitFriends          SplitFriend[]
+  splitGroups           SplitGroup[]
+  splitDebts            SplitDebt[]
 
   @@map("households")
 }
@@ -180,6 +183,7 @@ model Account {
   relatedTransactions   Transaction[]          @relation("TransactionRelatedAccount")
   recurringTransactions RecurringTransaction[]
   savingsGoals          SavingsGoal[]
+  splitDebts            SplitDebt[]
 
   // Indexes
   @@index([householdId])
@@ -503,3 +507,126 @@ model Notification {
   @@index([createdAt])
   @@map("notifications")
 }
+
+// ============================================================================
+// SPLIT (Friends, Groups, Debts & Installments)
+// ============================================================================
+
+model SplitFriend {
+  id          String   @id @default(uuid()) @db.Uuid
+  householdId String   @map("household_id") @db.Uuid
+  name        String   @db.VarChar(150)
+  emailOrPix  String?  @map("email_or_pix") @db.VarChar(255)
+  avatarColor String   @default("bg-purple-500") @map("avatar_color") @db.VarChar(50)
+  avatarUrl   String?  @map("avatar_url") @db.Text
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  household        Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  groupMemberships SplitGroupMember[]
+  debts            SplitDebt[]        @relation("SplitDebtFriend")
+  paidDebts        SplitDebt[]        @relation("SplitDebtPayerFriend")
+
+  @@index([householdId])
+  @@index([householdId, archived])
+  @@map("split_friends")
+}
+
+model SplitGroup {
+  id          String   @id @default(uuid()) @db.Uuid
+  householdId String   @map("household_id") @db.Uuid
+  name        String   @db.VarChar(150)
+  category    String   @default("other") @db.VarChar(50) // 'trip' | 'home' | 'food' | 'party' | 'other'
+  avatarUrl   String?  @map("avatar_url") @db.Text
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  household Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  members   SplitGroupMember[]
+  debts     SplitDebt[]
+
+  @@index([householdId])
+  @@index([householdId, archived])
+  @@map("split_groups")
+}
+
+model SplitGroupMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  friendId  String   @map("friend_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  group  SplitGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  friend SplitFriend @relation(fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, friendId])
+  @@index([groupId])
+  @@index([friendId])
+  @@map("split_group_members")
+}
+
+model SplitDebt {
+  id                  String   @id @default(uuid()) @db.Uuid
+  householdId         String   @map("household_id") @db.Uuid
+  description         String
+  category            String?  @db.VarChar(100)
+  accountId           String?  @map("account_id") @db.Uuid
+  accountName         String?  @map("account_name") @db.VarChar(150)
+  originalTotalAmount Decimal  @map("original_total_amount") @db.Decimal(15, 2)
+  debtTotalAmount     Decimal  @map("debt_total_amount") @db.Decimal(15, 2)
+  forgivenAmount      Decimal? @map("forgiven_amount") @db.Decimal(15, 2)
+  direction           String   @db.VarChar(30) // 'THEY_OWE_ME' | 'I_OWE_THEM'
+  payerFriendId       String?  @map("payer_friend_id") @db.Uuid
+  splitRule           String   @map("split_rule") @db.VarChar(30)
+  friendId            String   @map("friend_id") @db.Uuid
+  groupId             String?  @map("group_id") @db.Uuid
+  totalInstallments   Int      @default(1) @map("total_installments")
+  legacyTransactionId String?  @map("legacy_transaction_id") @db.Uuid
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  household    Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  account      Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  friend       SplitFriend        @relation("SplitDebtFriend", fields: [friendId], references: [id], onDelete: Cascade)
+  payerFriend  SplitFriend?       @relation("SplitDebtPayerFriend", fields: [payerFriendId], references: [id], onDelete: SetNull)
+  group        SplitGroup?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  installments SplitInstallment[]
+
+  @@index([householdId])
+  @@index([friendId])
+  @@index([groupId])
+  @@index([accountId])
+  @@index([legacyTransactionId])
+  @@map("split_debts")
+}
+
+model SplitInstallment {
+  id                      String    @id @default(uuid()) @db.Uuid
+  debtId                  String    @map("debt_id") @db.Uuid
+  installmentNumber       Int       @map("installment_number")
+  totalInstallments       Int       @map("total_installments")
+  amount                  Decimal   @db.Decimal(15, 2)
+  dueDate                 DateTime  @map("due_date") @db.Date
+  paid                    Boolean   @default(false)
+  paidAt                  DateTime? @map("paid_at") @db.Date
+  paidNote                String?   @map("paid_note")
+  legacyReimbursementTxId String?   @map("legacy_reimbursement_tx_id") @db.Uuid
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  debt SplitDebt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+
+  @@index([debtId])
+  @@index([dueDate])
+  @@index([paid])
+  @@index([legacyReimbursementTxId])
+  @@map("split_installments")
+}
+

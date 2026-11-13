@@ -24,6 +24,7 @@ import { recurringTransactionRoutes } from './modules/recurring-transactions/ind
 import { feedbackRoutes } from './modules/feedback/index.js';
 import { notificationRoutes } from './modules/notifications/index.js';
 import { dashboardRoutes } from './modules/dashboard/index.js';
+import { splitRoutes } from './modules/split/index.js';
 
 /**
  * Build the Fastify application
@@ -124,6 +125,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         { name: 'Budgets', description: 'Budget management endpoints' },
         { name: 'Savings Goals', description: 'Savings goal endpoints' },
         { name: 'Recurring Transactions', description: 'Recurring transaction endpoints' },
+        { name: 'Split', description: 'Split expenses, friends, groups, and debts endpoints' },
         { name: 'Feedback', description: 'User feedback endpoints' },
       ],
     },
@@ -312,6 +314,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(feedbackRoutes, { prefix: '/feedback' });
   await app.register(notificationRoutes, { prefix: '/notifications' });
   await app.register(dashboardRoutes, { prefix: '/dashboard' });
+  await app.register(splitRoutes, { prefix: '/split' });
 
   return app;
 }
