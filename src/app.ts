@@ -25,6 +25,7 @@ import { feedbackRoutes } from './modules/feedback/index.js';
 import { notificationRoutes } from './modules/notifications/index.js';
 import { dashboardRoutes } from './modules/dashboard/index.js';
 import { splitRoutes } from './modules/split/index.js';
+import { testModeRoutes } from './modules/test-mode/index.js';
 
 /**
  * Build the Fastify application
@@ -126,6 +127,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         { name: 'Savings Goals', description: 'Savings goal endpoints' },
         { name: 'Recurring Transactions', description: 'Recurring transaction endpoints' },
         { name: 'Split', description: 'Split expenses, friends, groups, and debts endpoints' },
+        { name: 'Test Mode', description: 'Isolated household sandbox for testing' },
         { name: 'Feedback', description: 'User feedback endpoints' },
       ],
     },
@@ -315,6 +317,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(notificationRoutes, { prefix: '/notifications' });
   await app.register(dashboardRoutes, { prefix: '/dashboard' });
   await app.register(splitRoutes, { prefix: '/split' });
+  await app.register(testModeRoutes, { prefix: '/test-mode' });
 
   return app;
 }

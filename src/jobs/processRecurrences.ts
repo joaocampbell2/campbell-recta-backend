@@ -75,6 +75,9 @@ async function processDueRecurringTransactions() {
         nextRunAt: {
           lte: today, // nextRunAt is today or in the past
         },
+        household: {
+          isSandbox: false,
+        },
       },
       include: {
         account: {

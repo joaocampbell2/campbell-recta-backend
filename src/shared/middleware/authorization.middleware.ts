@@ -185,7 +185,10 @@ export async function requireEditor(
  */
 export async function getUserHouseholds(userId: string) {
   const memberships = await prisma.householdMember.findMany({
-    where: { userId },
+    where: {
+      userId,
+      household: { isSandbox: false },
+    },
     include: {
       household: true,
     },

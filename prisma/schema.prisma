@@ -59,10 +59,14 @@ enum HouseholdRole {
 }
 
 model Household {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id                       String    @id @default(uuid()) @db.Uuid
+  name                     String
+  isSandbox                Boolean   @default(false) @map("is_sandbox")
+  sandboxOwnerId           String?   @map("sandbox_owner_id") @db.Uuid
+  sandboxSourceHouseholdId String?   @map("sandbox_source_household_id") @db.Uuid
+  sandboxExpiresAt         DateTime? @map("sandbox_expires_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
 
   // Relations
   members               HouseholdMember[]
@@ -77,6 +81,8 @@ model Household {
   splitGroups           SplitGroup[]
   splitDebts            SplitDebt[]
 
+  @@index([isSandbox, sandboxOwnerId])
+  @@index([isSandbox, sandboxExpiresAt])
   @@map("households")
 }
 

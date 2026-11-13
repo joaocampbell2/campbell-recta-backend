@@ -9,9 +9,12 @@ import { CategoryName, CategoryType, getDefaultCategoriesByType, getCategoryColo
  * Create a new household with the creator as OWNER
  */
 export async function createHousehold(userId: string, input: CreateHouseholdInput) {
-  // Check how many households the user is a member of
+  // Check how many households the user is a member of (excluding test-mode sandboxes)
   const userMemberships = await prisma.householdMember.findMany({
-    where: { userId },
+    where: {
+      userId,
+      household: { isSandbox: false },
+    },
     include: {
       household: {
         include: {
@@ -377,7 +380,10 @@ export async function updateSharedAccountIds(
   // Validate that all account IDs belong to the user's personal household
   // Get user's personal household (oldest household)
   const userMemberships = await prisma.householdMember.findMany({
-    where: { userId },
+    where: {
+      userId,
+      household: { isSandbox: false },
+    },
     include: { household: true },
     orderBy: { createdAt: 'asc' },
     take: 1,
@@ -577,7 +583,10 @@ export async function getOrCreatePersonalHousehold(userId: string, email: string
   // Find all household memberships and sort by household creation date
   // The oldest household (by createdAt) is the personal one
   const allMemberships = await prisma.householdMember.findMany({
-    where: { userId },
+    where: {
+      userId,
+      household: { isSandbox: false },
+    },
     include: { household: true },
   });
 
