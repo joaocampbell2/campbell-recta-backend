@@ -63,6 +63,7 @@ export enum CategoryName {
   // Internal movement categories
   TRANSFER = 'TRANSFER',
   ALLOCATION = 'ALLOCATION',
+  CREDIT_CARD_INVOICE = 'CREDIT_CARD_INVOICE',
 }
 
 export enum RecurrenceFrequency {
@@ -101,6 +102,7 @@ export const CATEGORY_NAME_DISPLAY: Record<CategoryName, string> = {
   [CategoryName.OTHER_EXPENSES]: 'Outras Despesas',
   [CategoryName.TRANSFER]: 'Transferência',
   [CategoryName.ALLOCATION]: 'Alocação',
+  [CategoryName.CREDIT_CARD_INVOICE]: 'Fatura Cartão',
 };
 
 /**
@@ -140,6 +142,7 @@ export function getCategoriesByType(type: CategoryType): CategoryName[] {
     CategoryName.RESTAURANT,
     CategoryName.FUEL,
     CategoryName.PHARMACY,
+    CategoryName.CREDIT_CARD_INVOICE,
     CategoryName.OTHER_EXPENSES,
   ];
 }
@@ -200,6 +203,7 @@ export function getCategoryColor(categoryName: CategoryName): string {
     // Internal movement categories
     [CategoryName.TRANSFER]: '#6366F1',
     [CategoryName.ALLOCATION]: '#8B5CF6',
+    [CategoryName.CREDIT_CARD_INVOICE]: '#6366F1',
   };
   return colorMap[categoryName] || '#64748B';
 }

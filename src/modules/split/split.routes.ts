@@ -14,11 +14,14 @@ import {
   friendIdParamSchema,
   debtInstallmentParamsSchema,
   createSplitFriendSchema,
+  updateSplitFriendSchema,
   archiveSplitEntitySchema,
   createSplitGroupSchema,
   createSplitDebtsSchema,
   toggleSplitInstallmentSchema,
   settleSplitDebtSchema,
+  linkReimbursementSchema,
+  settleFriendSchema,
   settleFriendMonthSchema,
   importLegacySplitDebtsSchema,
 } from './split.schema.js';
@@ -235,6 +238,61 @@ export async function splitRoutes(app: FastifyInstance) {
     const friend = await splitService.createSplitFriend(householdId, body);
 
     return reply.status(201).send({
+      success: true,
+      data: friend,
+    });
+  });
+
+  /**
+   * PATCH /split/friends/:id
+   * Update a split friend's name, contact/Pix, or avatar (EDITOR+)
+   */
+  app.patch<{ Params: { id: string } }>('/friends/:id', {
+    schema: {
+      description: 'Update a split friend (EDITOR+)',
+      tags: ['Split'],
+      security: [{ bearerAuth: [] }],
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string', format: 'uuid' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          emailOrPix: { type: 'string', nullable: true },
+          avatarColor: { type: 'string' },
+          avatarUrl: { type: 'string', nullable: true },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            data: { type: 'object', additionalProperties: true },
+          },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = idParamSchema.parse(request.params);
+    const body = updateSplitFriendSchema.parse(request.body);
+
+    const existing = await splitService.findSplitFriendById(id);
+    if (!existing) {
+      throw new NotFoundError('Split friend');
+    }
+    await requireEditor(request, existing.householdId);
+
+    const friend = await splitService.updateSplitFriend(
+      id,
+      existing.householdId,
+      body
+    );
+
+    return reply.send({
       success: true,
       data: friend,
     });
@@ -498,6 +556,10 @@ export async function splitRoutes(app: FastifyInstance) {
           accountId: { type: 'string', nullable: true },
           accountName: { type: 'string', nullable: true },
           originalTotalAmount: { type: 'number' },
+          myShareAmount: { type: 'number', nullable: true },
+          alreadyPaid: { type: 'boolean' },
+          date: { type: 'string', nullable: true },
+          createTransactions: { type: 'boolean' },
           direction: { type: 'string', enum: ['THEY_OWE_ME', 'I_OWE_THEM'] },
           payerFriendId: { type: 'string', nullable: true },
           splitRule: {
@@ -662,15 +724,18 @@ export async function splitRoutes(app: FastifyInstance) {
           required: ['debtId'],
           properties: { debtId: { type: 'string', format: 'uuid' } },
         },
-        body: {
-          type: 'object',
-          required: ['mode', 'paidAmount'],
-          properties: {
-            mode: { type: 'string', enum: ['full', 'partial'] },
-            paidAmount: { type: 'number' },
-            forgiveRemainder: { type: 'boolean' },
+          body: {
+            type: 'object',
+            required: ['mode', 'paidAmount'],
+            properties: {
+              mode: { type: 'string', enum: ['full', 'partial'] },
+              paidAmount: { type: 'number' },
+              forgiveRemainder: { type: 'boolean' },
+              forgiveAmount: { type: 'number' },
+              accountId: { type: 'string', nullable: true },
+              existingTransactionId: { type: 'string', format: 'uuid', nullable: true },
+            },
           },
-        },
         response: {
           200: {
             type: 'object',
@@ -706,6 +771,122 @@ export async function splitRoutes(app: FastifyInstance) {
   );
 
   /**
+   * POST /split/reimbursements/link
+   * Link an existing reimbursement transaction to one or more open split debts (EDITOR+)
+   */
+  app.post(
+    '/reimbursements/link',
+    {
+      schema: {
+        description: 'Link an existing reimbursement transaction to one or more split debts (EDITOR+)',
+        tags: ['Split'],
+        security: [{ bearerAuth: [] }],
+        body: {
+          type: 'object',
+          required: ['existingTransactionId', 'debtIds'],
+          properties: {
+            householdId: { type: 'string', format: 'uuid' },
+            existingTransactionId: { type: 'string', format: 'uuid' },
+            debtIds: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string', format: 'uuid' },
+            },
+            forgiveRemainder: { type: 'boolean' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              data: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const body = linkReimbursementSchema.parse(request.body);
+      const householdId =
+        body.householdId || (await ensurePersonalHousehold(request));
+
+      await requireEditor(request, householdId);
+
+      const updatedDebts = await splitService.linkReimbursementToDebts(
+        householdId,
+        body
+      );
+
+      return reply.send({
+        success: true,
+        data: updatedDebts,
+      });
+    }
+  );
+
+  /**
+   * POST /split/friends/:friendId/settle
+   * Settle net balance with a friend using FIFO & net compensation (EDITOR+)
+   */
+  app.post<{ Params: { friendId: string } }>(
+    '/friends/:friendId/settle',
+    {
+      schema: {
+        description: 'Settle net balance with a friend using FIFO and net compensation (EDITOR+)',
+        tags: ['Split'],
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['friendId'],
+          properties: { friendId: { type: 'string', format: 'uuid' } },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            accountId: { type: 'string', nullable: true },
+            mode: { type: 'string', enum: ['full', 'partial'] },
+            paidAmount: { type: 'number' },
+            forgiveRemainder: { type: 'boolean' },
+            month: { type: 'string', pattern: '^\\d{4}-\\d{2}$' },
+            notes: { type: 'string', nullable: true },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              data: { type: 'object', additionalProperties: true },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { friendId } = friendIdParamSchema.parse(request.params);
+      const body = settleFriendSchema.parse(request.body || {});
+
+      const existing = await splitService.findSplitFriendById(friendId);
+      if (!existing) {
+        throw new NotFoundError('Split friend');
+      }
+      await requireEditor(request, existing.householdId);
+
+      const result = await splitService.settleFriendBalance(
+        friendId,
+        existing.householdId,
+        body
+      );
+
+      return reply.send({
+        success: true,
+        data: result,
+      });
+    }
+  );
+
+  /**
    * POST /split/friends/:friendId/settle-month
    * Settle all pending installments for a friend in a given month (YYYY-MM) (EDITOR+)
    */
@@ -726,6 +907,7 @@ export async function splitRoutes(app: FastifyInstance) {
           required: ['month'],
           properties: {
             month: { type: 'string', pattern: '^\\d{4}-\\d{2}$' },
+            accountId: { type: 'string', nullable: true },
           },
         },
         response: {
@@ -752,7 +934,8 @@ export async function splitRoutes(app: FastifyInstance) {
       const updatedDebts = await splitService.settleFriendMonth(
         friendId,
         existing.householdId,
-        body.month
+        body.month,
+        body.accountId
       );
 
       return reply.send({

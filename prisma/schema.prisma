@@ -80,6 +80,7 @@ model Household {
   splitFriends          SplitFriend[]
   splitGroups           SplitGroup[]
   splitDebts            SplitDebt[]
+  splitSettlements      SplitSettlement[]
 
   @@index([isSandbox, sandboxOwnerId])
   @@index([isSandbox, sandboxExpiresAt])
@@ -190,6 +191,7 @@ model Account {
   recurringTransactions RecurringTransaction[]
   savingsGoals          SavingsGoal[]
   splitDebts            SplitDebt[]
+  splitSettlements      SplitSettlement[]
 
   // Indexes
   @@index([householdId])
@@ -253,6 +255,7 @@ model Category {
   type        CategoryType // INCOME or EXPENSE only
   icon        String?      @db.VarChar(50)
   color       String?      @db.VarChar(7) // Hex, e.g. #3B82F6
+  deletedAt   DateTime?    @map("deleted_at")
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
@@ -261,6 +264,7 @@ model Category {
   @@unique([householdId, name, type])
   @@index([householdId])
   @@index([householdId, type])
+  @@index([householdId, deletedAt])
   @@map("categories")
 }
 
@@ -289,6 +293,8 @@ model Transaction {
   attachmentUrl          String?         @map("attachment_url")
   // Split expense fields
   isSplit                Boolean         @default(false) @map("is_split") // Indica se a transação é dividida entre membros
+  splitDebtId            String?         @map("split_debt_id") @db.Uuid
+  splitSettlementId      String?         @map("split_settlement_id") @db.Uuid
   createdAt              DateTime        @default(now()) @map("created_at")
   updatedAt              DateTime        @updatedAt @map("updated_at")
 
@@ -299,7 +305,9 @@ model Transaction {
   toAccount            Account?              @relation("TransactionToAccount", fields: [toAccountId], references: [id], onDelete: SetNull)
   relatedAccount       Account?              @relation("TransactionRelatedAccount", fields: [relatedEntityId], references: [id], onDelete: SetNull)
   recurringTransaction RecurringTransaction? @relation(fields: [recurringTransactionId], references: [id], onDelete: SetNull)
-  splits                TransactionSplit[]    // Divisões da transação entre membros
+  splitDebt            SplitDebt?            @relation("SplitDebtTransactions", fields: [splitDebtId], references: [id], onDelete: SetNull)
+  splitSettlement      SplitSettlement?      @relation("SplitSettlementTransactions", fields: [splitSettlementId], references: [id], onDelete: SetNull)
+  splits               TransactionSplit[]    // Divisões da transação entre membros
 
   // Indexes for common queries
   @@index([householdId])
@@ -313,6 +321,8 @@ model Transaction {
   @@index([date])
   @@index([recurringTransactionId])
   @@index([installmentId])
+  @@index([splitDebtId])
+  @@index([splitSettlementId])
   @@map("transactions")
 }
 
@@ -534,6 +544,7 @@ model SplitFriend {
   groupMemberships SplitGroupMember[]
   debts            SplitDebt[]        @relation("SplitDebtFriend")
   paidDebts        SplitDebt[]        @relation("SplitDebtPayerFriend")
+  settlements      SplitSettlement[]
 
   @@index([householdId])
   @@index([householdId, archived])
@@ -597,12 +608,14 @@ model SplitDebt {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   // Relations
-  household    Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  account      Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  friend       SplitFriend        @relation("SplitDebtFriend", fields: [friendId], references: [id], onDelete: Cascade)
-  payerFriend  SplitFriend?       @relation("SplitDebtPayerFriend", fields: [payerFriendId], references: [id], onDelete: SetNull)
-  group        SplitGroup?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  installments SplitInstallment[]
+  household       Household             @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  account         Account?              @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  friend          SplitFriend           @relation("SplitDebtFriend", fields: [friendId], references: [id], onDelete: Cascade)
+  payerFriend     SplitFriend?          @relation("SplitDebtPayerFriend", fields: [payerFriendId], references: [id], onDelete: SetNull)
+  group           SplitGroup?           @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  installments    SplitInstallment[]
+  transactions    Transaction[]         @relation("SplitDebtTransactions")
+  settlementItems SplitSettlementItem[]
 
   @@index([householdId])
   @@index([friendId])
@@ -627,12 +640,62 @@ model SplitInstallment {
   updatedAt               DateTime  @updatedAt @map("updated_at")
 
   // Relations
-  debt SplitDebt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  debt            SplitDebt             @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  settlementItems SplitSettlementItem[]
 
   @@index([debtId])
   @@index([dueDate])
   @@index([paid])
   @@index([legacyReimbursementTxId])
   @@map("split_installments")
+}
+
+model SplitSettlement {
+  id                      String   @id @default(uuid()) @db.Uuid
+  householdId             String   @map("household_id") @db.Uuid
+  friendId                String   @map("friend_id") @db.Uuid
+  direction               String   @db.VarChar(30) // 'THEY_PAID_ME' | 'I_PAID_THEM'
+  totalPaid               Decimal  @map("total_paid") @db.Decimal(15, 2)
+  forgivenAmount          Decimal? @map("forgiven_amount") @db.Decimal(15, 2)
+  accountId               String?  @map("account_id") @db.Uuid
+  settlementTransactionId String?  @map("settlement_transaction_id") @db.Uuid
+  abonoTransactionId      String?  @map("abono_transaction_id") @db.Uuid
+  settledAt               DateTime @default(now()) @map("settled_at") @db.Date
+  notes                   String?
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  household    Household             @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  friend       SplitFriend           @relation(fields: [friendId], references: [id], onDelete: Cascade)
+  account      Account?              @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  items        SplitSettlementItem[]
+  transactions Transaction[]         @relation("SplitSettlementTransactions")
+
+  @@index([householdId])
+  @@index([friendId])
+  @@index([accountId])
+  @@index([settlementTransactionId])
+  @@index([abonoTransactionId])
+  @@map("split_settlements")
+}
+
+model SplitSettlementItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  settlementId  String   @map("settlement_id") @db.Uuid
+  debtId        String   @map("debt_id") @db.Uuid
+  installmentId String?  @map("installment_id") @db.Uuid
+  amountApplied Decimal  @map("amount_applied") @db.Decimal(15, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  settlement  SplitSettlement   @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  debt        SplitDebt         @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  installment SplitInstallment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
+
+  @@index([settlementId])
+  @@index([debtId])
+  @@index([installmentId])
+  @@map("split_settlement_items")
 }
 

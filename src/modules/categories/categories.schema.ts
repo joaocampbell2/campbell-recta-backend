@@ -49,5 +49,6 @@ export type CategoryIdParam = z.infer<typeof categoryIdParamSchema>;
 export const listCategoriesQuerySchema = z.object({
   householdId: z.string().uuid().optional(),
   type: categoryTypeEnum.optional(),
+  includeArchived: z.coerce.boolean().optional(),
 });
 export type ListCategoriesQuery = z.infer<typeof listCategoriesQuerySchema>;

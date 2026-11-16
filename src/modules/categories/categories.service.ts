@@ -20,6 +20,16 @@ export async function createCategory(input: CreateCategoryInput) {
   });
 
   if (existing) {
+    if (existing.deletedAt) {
+      return await prisma.category.update({
+        where: { id: existing.id },
+        data: {
+          deletedAt: null,
+          ...(input.icon !== undefined && { icon: input.icon }),
+          ...(input.color !== undefined && { color: input.color }),
+        },
+      });
+    }
     throw new ConflictError('Category with this name and type already exists');
   }
 
@@ -62,12 +72,13 @@ export async function findCategoryById(categoryId: string) {
  * List custom categories for a household
  */
 export async function listCategories(query: ListCategoriesQuery) {
-  const { householdId, type } = query;
+  const { householdId, type, includeArchived } = query;
 
   const categories = await prisma.category.findMany({
     where: {
       householdId: householdId!,
       ...(type && { type }),
+      ...(!includeArchived && { deletedAt: null }),
     },
     orderBy: [{ type: 'asc' }, { name: 'asc' }],
   });
@@ -136,7 +147,11 @@ export async function deleteCategory(categoryId: string, householdId: string) {
   ]);
 
   if (txCount > 0 || budgetCount > 0 || recCount > 0) {
-    throw new CategoryInUseError('Category is in use');
+    await prisma.category.update({
+      where: { id: categoryId },
+      data: { deletedAt: new Date() },
+    });
+    return;
   }
 
   await prisma.category.delete({

@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { authMiddleware, getAuthUser } from '../../shared/middleware/auth.middleware.js';
+import { BadRequestError } from '../../shared/errors/index.js';
 import {
   ensurePersonalHousehold,
   getUserByFirebaseUid,
+  requireEditor,
   requireHouseholdMember,
 } from '../../shared/middleware/authorization.middleware.js';
-import { startTestModeSchema } from './test-mode.schema.js';
+import { applyTestModeSchema, startTestModeSchema } from './test-mode.schema.js';
 import * as testModeService from './test-mode.service.js';
 
 export async function testModeRoutes(app: FastifyInstance) {
@@ -133,6 +135,73 @@ export async function testModeRoutes(app: FastifyInstance) {
     const user = await getUserByFirebaseUid(authUser.uid, authUser.email);
 
     const result = await testModeService.stopTestMode(user.id);
+
+    return reply.send({
+      success: true,
+      data: result,
+    });
+  });
+
+  /**
+   * POST /test-mode/apply
+   * Apply sandbox household changes back to the original household and delete the sandbox
+   */
+  app.post('/apply', {
+    schema: {
+      description: 'Apply sandbox changes back to the original household atomically and delete the sandbox',
+      tags: ['Test Mode'],
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['sandboxHouseholdId'],
+        properties: {
+          sandboxHouseholdId: { type: 'string', format: 'uuid' },
+          originalHouseholdId: { type: 'string', format: 'uuid' },
+          force: { type: 'boolean', default: false },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            data: {
+              type: 'object',
+              properties: {
+                active: { type: 'boolean' },
+                appliedHouseholdId: { type: 'string', format: 'uuid' },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const body = applyTestModeSchema.parse(request.body ?? {});
+    const authUser = getAuthUser(request);
+    const user = await getUserByFirebaseUid(authUser.uid, authUser.email);
+
+    const sandbox = await testModeService.getSandboxForApply(
+      user.id,
+      body.sandboxHouseholdId
+    );
+
+    if (
+      body.originalHouseholdId &&
+      body.originalHouseholdId !== sandbox.sourceHouseholdId
+    ) {
+      throw new BadRequestError(
+        'originalHouseholdId does not match the sandbox source household'
+      );
+    }
+
+    await requireEditor(request, sandbox.sourceHouseholdId);
+
+    const result = await testModeService.applyTestMode(
+      user.id,
+      body.sandboxHouseholdId,
+      body.force
+    );
 
     return reply.send({
       success: true,

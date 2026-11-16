@@ -204,6 +204,8 @@ export const payInvoiceSchema = z.object({
   amount: z.coerce.number().positive().optional(), // Valor a pagar (opcional, se não fornecido usa o total da fatura)
   month: z.string().regex(/^\d{4}-\d{2}$/, 'Month must be in format YYYY-MM'), // "YYYY-MM"
   description: z.string().max(255).optional(),
+  categoryName: z.string().max(50).optional(),
+  date: z.coerce.date().optional(),
 });
 
 export type PayInvoiceInput = z.infer<typeof payInvoiceSchema>;

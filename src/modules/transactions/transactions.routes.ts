@@ -618,6 +618,12 @@ export async function transactionRoutes(app: FastifyInstance) {
             transactionId: { type: 'string', format: 'uuid' },
           },
         },
+        querystring: {
+          type: 'object',
+          properties: {
+            deleteSplitDebt: { type: 'string', enum: ['true', 'false'] },
+          },
+        },
         response: {
           204: { type: 'null' },
         },
@@ -625,12 +631,18 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { transactionId } = transactionIdParamSchema.parse(request.params);
+      const query = request.query as { deleteSplitDebt?: string } | undefined;
+      const deleteSplitDebt = query?.deleteSplitDebt === 'true';
 
       // Get transaction to verify household access
       const existingTransaction = await transactionsService.getTransaction(transactionId);
       await requireEditor(request, existingTransaction.householdId);
 
-      await transactionsService.deleteTransaction(transactionId, existingTransaction.householdId);
+      await transactionsService.deleteTransaction(
+        transactionId,
+        existingTransaction.householdId,
+        { deleteSplitDebt }
+      );
 
       return reply.status(204).send();
     }

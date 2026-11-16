@@ -16,6 +16,35 @@ import type {
   DashboardHeatmapDay,
 } from './dashboard.schema.js';
 
+const CREDIT_CARD_INVOICE_CATEGORY = 'CREDIT_CARD_INVOICE';
+const LEGACY_CREDIT_CARD_INVOICE_CATEGORY = 'CUSTOM:e61a55a5-d8c4-4f6a-9a9b-272d740d125c';
+
+function isCreditCardInvoiceCustomName(name: string): boolean {
+  const lower = name.trim().toLowerCase();
+  return (
+    (lower.includes('fatura') && (lower.includes('cart') || lower.includes('card'))) ||
+    lower === 'cartão de crédito' ||
+    lower === 'cartao de credito'
+  );
+}
+
+async function getExcludedInvoiceCategories(householdId: string): Promise<Set<string>> {
+  const customCategories = await prisma.category.findMany({
+    where: { householdId, type: CategoryType.EXPENSE },
+    select: { id: true, name: true },
+  });
+  const set = new Set<string>([
+    CREDIT_CARD_INVOICE_CATEGORY,
+    LEGACY_CREDIT_CARD_INVOICE_CATEGORY,
+  ]);
+  for (const c of customCategories) {
+    if (isCreditCardInvoiceCustomName(c.name)) {
+      set.add(toCustomCategoryName(c.id));
+    }
+  }
+  return set;
+}
+
 /**
  * Get complete dashboard overview with all aggregated data
  */
@@ -36,10 +65,13 @@ export async function getDashboardOverview(query: DashboardOverviewQuery): Promi
   // calculateSummary (which also checks account.type === CREDIT) but still counted by
   // getMonthlyAggregates/heatmap (which only filter by accountId), making the widgets
   // disagree with each other.
-  const creditCardAccounts = await prisma.account.findMany({
-    where: { householdId, type: AccountType.CREDIT },
-    select: { id: true },
-  });
+  const [creditCardAccounts, excludedInvoiceCategories] = await Promise.all([
+    prisma.account.findMany({
+      where: { householdId, type: AccountType.CREDIT },
+      select: { id: true },
+    }),
+    getExcludedInvoiceCategories(householdId),
+  ]);
   const creditCardIds = new Set(creditCardAccounts.map(a => a.id));
 
   // Fetch all data in parallel
@@ -86,9 +118,9 @@ export async function getDashboardOverview(query: DashboardOverviewQuery): Promi
       },
     }),
     // Last 6 months aggregated data for comparison
-    getMonthlyAggregates(householdId, 6, month, creditCardIds),
+    getMonthlyAggregates(householdId, 6, month, creditCardIds, excludedInvoiceCategories),
     // Last 12 months aggregated data for balance evolution
-    getMonthlyAggregates(householdId, 12, month, creditCardIds),
+    getMonthlyAggregates(householdId, 12, month, creditCardIds, excludedInvoiceCategories),
   ]);
 
   // Infer transaction type from category for recurring transactions
@@ -101,17 +133,17 @@ export async function getDashboardOverview(query: DashboardOverviewQuery): Promi
   }));
 
   // Calculate summary
-  const summary = calculateSummary(currentMonthTransactions, creditCardIds);
-  const previousSummary = calculateSummary(previousMonthTransactions, creditCardIds);
+  const summary = calculateSummary(currentMonthTransactions, creditCardIds, excludedInvoiceCategories);
+  const previousSummary = calculateSummary(previousMonthTransactions, creditCardIds, excludedInvoiceCategories);
 
   // Calculate trend
   const trend = calculateTrend(summary, previousSummary);
 
   // Calculate forecast (based on last month + recurring)
-  const forecast = calculateForecast(previousSummary, recurringTransactions, creditCardIds);
+  const forecast = calculateForecast(previousSummary, recurringTransactions, creditCardIds, excludedInvoiceCategories);
 
   // Calculate category breakdown
-  const categoryBreakdown = calculateCategoryBreakdown(currentMonthTransactions, creditCardIds);
+  const categoryBreakdown = calculateCategoryBreakdown(currentMonthTransactions, creditCardIds, excludedInvoiceCategories);
 
   // Monthly comparison (last 6 months)
   const monthlyComparison = formatMonthlyComparison(last6MonthsData);
@@ -123,7 +155,8 @@ export async function getDashboardOverview(query: DashboardOverviewQuery): Promi
   const fixedVsVariable = calculateFixedVsVariable(
     currentMonthTransactions,
     recurringTransactions,
-    creditCardIds
+    creditCardIds,
+    excludedInvoiceCategories
   );
 
   // Budget vs Realized
@@ -135,7 +168,7 @@ export async function getDashboardOverview(query: DashboardOverviewQuery): Promi
   );
 
   // Heatmap (daily spending)
-  const heatmap = await getHeatmapData(householdId, month, creditCardIds);
+  const heatmap = await getHeatmapData(householdId, month, creditCardIds, excludedInvoiceCategories);
 
   return {
     summary,
@@ -157,10 +190,12 @@ function calculateSummary(
   transactions: Array<{
     type: string;
     amount: { toNumber: () => number } | number;
+    categoryName?: string | null;
     accountId: string | null;
     account: { type: string } | null;
   }>,
-  creditCardIds: Set<string>
+  creditCardIds: Set<string>,
+  excludedInvoiceCategories: Set<string> = new Set([CREDIT_CARD_INVOICE_CATEGORY])
 ): DashboardSummary {
   let totalIncome = 0;
   let totalExpense = 0;
@@ -168,6 +203,11 @@ function calculateSummary(
   for (const t of transactions) {
     // Exclude transfers and allocations
     if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) {
+      continue;
+    }
+
+    // Exclude credit card invoice payment category to prevent double counting
+    if (t.categoryName && excludedInvoiceCategories.has(t.categoryName)) {
       continue;
     }
 
@@ -230,18 +270,21 @@ function calculateForecast(
   recurringTransactions: Array<{
     type: string;
     amount: { toNumber: () => number } | number;
+    categoryName?: string | null;
     accountId: string | null;
     account: { type: string } | null;
     frequency?: string;
   }>,
-  creditCardIds: Set<string>
+  creditCardIds: Set<string>,
+  excludedInvoiceCategories: Set<string> = new Set([CREDIT_CARD_INVOICE_CATEGORY])
 ): DashboardForecast {
   // Base prediction on previous month
   let predictedIncome = previousSummary.totalIncome;
   let predictedExpense = previousSummary.totalExpense;
 
-  // Add recurring transactions (filtering out credit cards)
+  // Add recurring transactions (filtering out credit cards and invoice payments)
   for (const rt of recurringTransactions) {
+    if (rt.categoryName && excludedInvoiceCategories.has(rt.categoryName)) continue;
     if (rt.accountId && creditCardIds.has(rt.accountId)) continue;
     if (rt.account && rt.account.type === AccountType.CREDIT) continue;
 
@@ -306,13 +349,15 @@ function calculateCategoryBreakdown(
     accountId: string | null;
     account: { type: string } | null;
   }>,
-  creditCardIds: Set<string>
+  creditCardIds: Set<string>,
+  excludedInvoiceCategories: Set<string> = new Set([CREDIT_CARD_INVOICE_CATEGORY])
 ): CategoryBreakdown[] {
   const categoryMap = new Map<string, { income: number; expense: number }>();
 
   for (const t of transactions) {
     if (!t.categoryName) continue;
     if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) continue;
+    if (excludedInvoiceCategories.has(t.categoryName)) continue;
     if (t.accountId && creditCardIds.has(t.accountId)) continue;
     if (t.account && t.account.type === AccountType.CREDIT) continue;
 
@@ -348,7 +393,8 @@ async function getMonthlyAggregates(
   householdId: string,
   months: number,
   currentMonth: string,
-  creditCardIds: Set<string>
+  creditCardIds: Set<string>,
+  excludedInvoiceCategories: Set<string> = new Set([CREDIT_CARD_INVOICE_CATEGORY])
 ): Promise<Array<{ month: string; income: number; expense: number }>> {
   const [year, monthNum] = currentMonth.split('-').map(Number);
   const results: Array<{ month: string; income: number; expense: number }> = [];
@@ -377,6 +423,7 @@ async function getMonthlyAggregates(
       select: {
         type: true,
         amount: true,
+        categoryName: true,
       },
     });
 
@@ -385,6 +432,7 @@ async function getMonthlyAggregates(
 
     for (const t of transactions) {
       if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) continue;
+      if (t.categoryName && excludedInvoiceCategories.has(t.categoryName)) continue;
       
       const amount = t.amount.toNumber();
       if (t.type === TransactionType.INCOME) {
@@ -449,12 +497,14 @@ function calculateFixedVsVariable(
   transactions: Array<{
     type: string;
     amount: { toNumber: () => number } | number;
+    categoryName?: string | null;
     accountId: string | null;
     account: { type: string } | null;
     recurringTransactionId: string | null;
   }>,
   recurringTransactions: Array<{ id: string }>,
-  creditCardIds: Set<string>
+  creditCardIds: Set<string>,
+  excludedInvoiceCategories: Set<string> = new Set([CREDIT_CARD_INVOICE_CATEGORY])
 ): FixedVsVariable {
   const recurringIds = new Set(recurringTransactions.map(rt => rt.id));
   
@@ -463,6 +513,7 @@ function calculateFixedVsVariable(
 
   for (const t of transactions) {
     if (t.type !== TransactionType.EXPENSE) continue;
+    if (t.categoryName && excludedInvoiceCategories.has(t.categoryName)) continue;
     if (t.accountId && creditCardIds.has(t.accountId)) continue;
     if (t.account && t.account.type === AccountType.CREDIT) continue;
 
@@ -567,7 +618,8 @@ function calculateBudgetVsRealized(
 async function getHeatmapData(
   householdId: string,
   month: string,
-  creditCardIds: Set<string>
+  creditCardIds: Set<string>,
+  excludedInvoiceCategories: Set<string> = new Set([CREDIT_CARD_INVOICE_CATEGORY])
 ): Promise<{ month: string; data: DashboardHeatmapDay[]; total: number; daysInMonth: number }> {
   const [year, monthNum] = month.split('-').map(Number);
   const monthStart = new Date(year, monthNum - 1, 1);
@@ -575,6 +627,7 @@ async function getHeatmapData(
   const daysInMonth = new Date(year, monthNum, 0).getDate();
 
   const creditCardIdsArray = Array.from(creditCardIds);
+  const excludedCategoriesArray = Array.from(excludedInvoiceCategories);
 
   // Use raw SQL for efficient aggregation
   const dailySpending = await prisma.$queryRaw<Array<{ day: number; amount: string }>>`
@@ -586,6 +639,10 @@ async function getHeatmapData(
       AND date >= ${monthStart}
       AND date <= ${monthEnd}
       AND type = 'EXPENSE'
+      AND (
+        "category_name" IS NULL
+        OR "category_name" NOT IN (SELECT unnest(${excludedCategoriesArray}::text[]))
+      )
       AND (
         "account_id" IS NULL 
         OR "account_id" NOT IN (SELECT unnest(${creditCardIdsArray}::uuid[]))

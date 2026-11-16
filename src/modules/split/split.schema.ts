@@ -73,6 +73,14 @@ export const createSplitFriendSchema = z.object({
 });
 export type CreateSplitFriendInput = z.infer<typeof createSplitFriendSchema>;
 
+export const updateSplitFriendSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(150).optional(),
+  emailOrPix: z.string().trim().max(255).optional().nullable(),
+  avatarColor: z.string().trim().max(50).optional(),
+  avatarUrl: z.string().optional().nullable(),
+});
+export type UpdateSplitFriendInput = z.infer<typeof updateSplitFriendSchema>;
+
 export const archiveSplitEntitySchema = z.object({
   archived: z.boolean(),
 });
@@ -107,6 +115,10 @@ export const createSplitDebtsSchema = z.object({
   accountId: z.string().optional().nullable(),
   accountName: z.string().max(150).optional().nullable(),
   originalTotalAmount: z.coerce.number().positive('Total amount must be positive'),
+  myShareAmount: z.coerce.number().nonnegative().optional().nullable(),
+  alreadyPaid: z.boolean().optional().default(false),
+  date: z.string().optional().nullable(),
+  createTransactions: z.boolean().optional().default(true),
   direction: splitDirectionEnum,
   payerFriendId: z.string().optional().nullable(),
   splitRule: splitRuleEnum,
@@ -127,11 +139,33 @@ export const settleSplitDebtSchema = z.object({
   mode: z.enum(['full', 'partial']),
   paidAmount: z.coerce.number().nonnegative('Paid amount must be non-negative'),
   forgiveRemainder: z.boolean().optional().default(false),
+  forgiveAmount: z.coerce.number().nonnegative().optional(),
+  accountId: z.string().optional().nullable(),
+  existingTransactionId: z.string().uuid().optional().nullable(),
 });
 export type SettleSplitDebtInput = z.infer<typeof settleSplitDebtSchema>;
 
+export const linkReimbursementSchema = z.object({
+  householdId: z.string().uuid().optional(),
+  existingTransactionId: z.string().uuid(),
+  debtIds: z.array(z.string().uuid()).min(1, 'At least one debt must be selected'),
+  forgiveRemainder: z.boolean().optional().default(false),
+});
+export type LinkReimbursementInput = z.infer<typeof linkReimbursementSchema>;
+
+export const settleFriendSchema = z.object({
+  accountId: z.string().optional().nullable(),
+  mode: z.enum(['full', 'partial']).optional().default('full'),
+  paidAmount: z.coerce.number().nonnegative().optional(),
+  forgiveRemainder: z.boolean().optional().default(false),
+  month: z.string().regex(/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format').optional(),
+  notes: z.string().max(500).optional().nullable(),
+});
+export type SettleFriendInput = z.infer<typeof settleFriendSchema>;
+
 export const settleFriendMonthSchema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format'),
+  accountId: z.string().optional().nullable(),
 });
 export type SettleFriendMonthInput = z.infer<typeof settleFriendMonthSchema>;
 

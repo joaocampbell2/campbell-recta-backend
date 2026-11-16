@@ -625,16 +625,20 @@ export async function listTransactions(query: ListTransactionsQuery) {
   }
 
   // Build where clause
-  const where: Prisma.TransactionWhereInput = {
-    householdId,
-    ...(accountId && { accountId }),
-    ...(categoryName && { categoryName }),
-    // Support TransactionType filter (TRANSFER, ALLOCATION, INCOME, EXPENSE)
-    ...(type && {
-      type: type as TransactionType,
-    }),
-    ...(dateFilter && { date: dateFilter }),
-    ...(search && {
+  const andConditions: Prisma.TransactionWhereInput[] = [];
+
+  if (accountId) {
+    andConditions.push({
+      OR: [
+        { accountId },
+        { fromAccountId: accountId },
+        { toAccountId: accountId },
+      ],
+    });
+  }
+
+  if (search) {
+    andConditions.push({
       OR: [
         { description: { contains: search, mode: 'insensitive' } },
         { notes: { contains: search, mode: 'insensitive' } },
@@ -658,7 +662,18 @@ export async function listTransactions(query: ListTransactionsQuery) {
           return [];
         })() : []),
       ],
+    });
+  }
+
+  const where: Prisma.TransactionWhereInput = {
+    householdId,
+    ...(categoryName && { categoryName }),
+    // Support TransactionType filter (TRANSFER, ALLOCATION, INCOME, EXPENSE)
+    ...(type && {
+      type: type as TransactionType,
     }),
+    ...(dateFilter && { date: dateFilter }),
+    ...(andConditions.length > 0 && { AND: andConditions }),
   };
 
   // Get transactions with pagination
@@ -1007,7 +1022,11 @@ export async function updateTransaction(
 /**
  * Delete transaction and revert account balance
  */
-export async function deleteTransaction(transactionId: string, householdId: string) {
+export async function deleteTransaction(
+  transactionId: string,
+  householdId: string,
+  options?: { deleteSplitDebt?: boolean }
+) {
   const transaction = await prisma.transaction.findFirst({
     where: { id: transactionId, householdId },
     include: {
@@ -1026,6 +1045,74 @@ export async function deleteTransaction(transactionId: string, householdId: stri
 
   if (!transaction) {
     throw new NotFoundError('Transaction');
+  }
+
+  if (options?.deleteSplitDebt && transaction.splitDebtId) {
+    const { deleteSplitDebt } = await import('../split/split.service.js');
+    await deleteSplitDebt(transaction.splitDebtId, householdId);
+    return;
+  }
+
+  if (options?.deleteSplitDebt && transaction.splitSettlementId) {
+    const settlementId = transaction.splitSettlementId;
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const linkedTransactions = await tx.transaction.findMany({
+        where: { householdId, splitSettlementId: settlementId },
+        include: { account: { select: { id: true, type: true } } },
+      });
+
+      const balanceReversals = new Map<string, { change: number; type: string }>();
+      for (const t of linkedTransactions) {
+        if (t.paid !== false && t.accountId && t.account && t.categoryName) {
+          const isInc = t.type === TransactionType.INCOME;
+          const reverseChange = -calculateBalanceChange(
+            t.amount.toNumber(),
+            isInc,
+            t.account.type
+          );
+          const current = balanceReversals.get(t.accountId);
+          balanceReversals.set(t.accountId, {
+            change: (current?.change || 0) + reverseChange,
+            type: t.account.type,
+          });
+        }
+      }
+
+      if (linkedTransactions.length > 0) {
+        await tx.transaction.deleteMany({
+          where: { id: { in: linkedTransactions.map((t) => t.id) } },
+        });
+      }
+
+      for (const [accountId, info] of balanceReversals.entries()) {
+        if (Math.abs(info.change) > 0.001) {
+          await updateBalanceForNormalTransaction(tx, accountId, info.change);
+          if (info.type === AccountType.CREDIT) {
+            await recalculateCreditCardLimit(tx, accountId);
+          }
+        }
+      }
+
+      const items = await tx.splitSettlementItem.findMany({
+        where: { settlementId },
+        select: { installmentId: true },
+      });
+      const installmentIds = items
+        .map((i) => i.installmentId)
+        .filter((id): id is string => Boolean(id));
+
+      if (installmentIds.length > 0) {
+        await tx.splitInstallment.updateMany({
+          where: { id: { in: installmentIds } },
+          data: { paid: false, paidAt: null, paidNote: null },
+        });
+      }
+
+      await tx.splitSettlement.deleteMany({
+        where: { id: settlementId, householdId },
+      });
+    });
+    return;
   }
 
   // Delete transaction and revert balance
@@ -1348,6 +1435,27 @@ export async function getTransactionSummary(query: TransactionSummaryQuery) {
     if (endDate) dateFilter.lte = endDate;
   }
 
+  const CREDIT_CARD_INVOICE_CATEGORY = 'CREDIT_CARD_INVOICE';
+  const LEGACY_CREDIT_CARD_INVOICE_CATEGORY = 'CUSTOM:e61a55a5-d8c4-4f6a-9a9b-272d740d125c';
+  const customExpenseCats = await prisma.category.findMany({
+    where: { householdId, type: CategoryType.EXPENSE },
+    select: { id: true, name: true },
+  });
+  const excludedInvoiceCategories = new Set<string>([
+    CREDIT_CARD_INVOICE_CATEGORY,
+    LEGACY_CREDIT_CARD_INVOICE_CATEGORY,
+  ]);
+  for (const c of customExpenseCats) {
+    const lower = c.name.trim().toLowerCase();
+    if (
+      (lower.includes('fatura') && (lower.includes('cart') || lower.includes('card'))) ||
+      lower === 'cartão de crédito' ||
+      lower === 'cartao de credito'
+    ) {
+      excludedInvoiceCategories.add(toCustomCategoryName(c.id));
+    }
+  }
+
   // Get transactions with account information to filter credit cards
   const transactions = await prisma.transaction.findMany({
     where: {
@@ -1370,6 +1478,11 @@ export async function getTransactionSummary(query: TransactionSummaryQuery) {
   for (const t of transactions) {
     // Exclude transfers and allocations from income/expense calculations
     if (t.type === TransactionType.TRANSFER || t.type === TransactionType.ALLOCATION) {
+      continue;
+    }
+
+    // Exclude credit card invoice payments to avoid double counting
+    if (t.categoryName && excludedInvoiceCategories.has(t.categoryName)) {
       continue;
     }
 
@@ -1421,12 +1534,31 @@ export async function getSpendingByCategory(query: TransactionSummaryQuery) {
     if (endDate) dateFilter.lte = endDate;
   }
 
+  const CREDIT_CARD_INVOICE_CATEGORY = 'CREDIT_CARD_INVOICE';
+  const LEGACY_CREDIT_CARD_INVOICE_CATEGORY = 'CUSTOM:e61a55a5-d8c4-4f6a-9a9b-272d740d125c';
   const expenseSystem = getCategoriesByType(CategoryType.EXPENSE);
   const customExpense = await prisma.category.findMany({
     where: { householdId, type: CategoryType.EXPENSE },
-    select: { id: true, color: true },
+    select: { id: true, name: true, color: true },
   });
-  const expenseCategoryNames = [...expenseSystem, ...customExpense.map((c) => toCustomCategoryName(c.id))];
+  const excludedInvoiceCategories = new Set<string>([
+    CREDIT_CARD_INVOICE_CATEGORY,
+    LEGACY_CREDIT_CARD_INVOICE_CATEGORY,
+  ]);
+  for (const c of customExpense) {
+    const lower = c.name.trim().toLowerCase();
+    if (
+      (lower.includes('fatura') && (lower.includes('cart') || lower.includes('card'))) ||
+      lower === 'cartão de crédito' ||
+      lower === 'cartao de credito'
+    ) {
+      excludedInvoiceCategories.add(toCustomCategoryName(c.id));
+    }
+  }
+  const expenseCategoryNames = [
+    ...expenseSystem,
+    ...customExpense.map((c) => toCustomCategoryName(c.id)),
+  ].filter((name) => !excludedInvoiceCategories.has(name));
   const customColorMap = new Map(customExpense.map((c) => [toCustomCategoryName(c.id), c.color ?? '#64748B']));
 
   const result = await prisma.transaction.groupBy({
@@ -2005,7 +2137,7 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
   }
   const accountId = input.accountId;
 
-  const { sourceAccountId, amount, month, description } = input;
+  const { sourceAccountId, amount, month, description, categoryName, date } = input;
 
   // Parse month
   const [year, monthNum] = month.split('-').map(Number);
@@ -2213,10 +2345,10 @@ export async function payCreditCardInvoice(input: PayInvoiceInput) {
         householdId: householdId!,
         type: TransactionType.EXPENSE,
         accountId: sourceAccountId,
-        categoryName: CategoryName.OTHER_EXPENSES,
+        categoryName: categoryName || CategoryName.CREDIT_CARD_INVOICE,
         amount: new Prisma.Decimal(amountToPay),
         description: description || `Pagamento de fatura - ${month}`,
-        date: new Date(),
+        date: date || new Date(),
         paid: true,
         attachmentUrl: technicalIdentifier,
       },

@@ -9,8 +9,18 @@ declare global {
 }
 
 function createPrismaClient(): PrismaClient {
+  const url = new URL(env.DATABASE_URL);
+  const sslMode = url.searchParams.get('sslmode');
+  const isLocalDb = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  const useInsecureSsl = !isLocalDb && sslMode !== 'disable';
+
+  if (useInsecureSsl && sslMode) {
+    url.searchParams.delete('sslmode');
+  }
+
   const pool = new Pool({
-    connectionString: env.DATABASE_URL,
+    connectionString: url.toString(),
+    ...(useInsecureSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
   
   const adapter = new PrismaPg(pool);

@@ -41,6 +41,7 @@ export async function categoryRoutes(app: FastifyInstance) {
         properties: {
           householdId: { type: 'string', format: 'uuid' },
           type: { type: 'string', enum: ['INCOME', 'EXPENSE'] },
+          includeArchived: { type: 'boolean' },
         },
       },
       response: {
@@ -91,7 +92,11 @@ export async function categoryRoutes(app: FastifyInstance) {
       isSystem: true as const,
     }));
 
-    const custom = await categoriesService.listCategories({ householdId, type });
+    const custom = await categoriesService.listCategories({
+      householdId,
+      type,
+      includeArchived: query.includeArchived,
+    });
     const customMapped = custom.map((c) => ({
       id: c.id,
       name: c.name,
